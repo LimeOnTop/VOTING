@@ -13,7 +13,7 @@
 - Браузер: открытие ссылки опроса, выбор ответа, отправка, состояние ожидания, затем «Ваш голос учтён». Успешно.
 - `npm run build`: TypeScript и Vite 7.3.7 успешно. `npm audit`: 0 vulnerabilities на момент проверки.
 - Helm 3.18.6 `lint --strict`: успешно; `template` baseline и сочетание ingress + ServiceMonitor/PrometheusRule + KEDA: успешно. Обязательный image.tag передан явно.
-- k6 1.3.0 в Docker, `RATE=100 DURATION=10s`: 1001 итерация / 1001 ответа 202, ошибок HTTP 0%, vote p99=8,85 мс. С учётом GET session — 2002 HTTP-запроса. Сценарий с повторами cookie измеряет ingress; не throughput уникального подсчёта и не предельную capacity.
+- k6 1.3.0 в Docker, `RATE=100 DURATION=10s`: 1001 итерация / 1001 ответа 202, ошибок HTTP 0%, vote p99=8,85 мс. С учётом GET session — 2002 HTTP-запроса. Cookie сбрасывается на каждой итерации k6: новый псевдоним браузера для каждого запроса. Измеряется ingress без ожидания подсчёта; не throughput projector и не предельная capacity.
 - `.env`, зависимости и build artifacts исключены из git; `git diff --check` успешно.
 
 На macOS linker вывел предупреждение LC_DYSYMTAB при race-сборке HTTP tests; команды завершились успешно. В CI тесты запускаются на Linux.
