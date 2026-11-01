@@ -1,0 +1,88 @@
+name: voting
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: voting
+      POSTGRES_PASSWORD: local-dev-only
+      POSTGRES_DB: voting
+    ports: ["127.0.0.1:15432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voting"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  kafka:
+    image: apache/kafka:3.9.1
+    ports: ["127.0.0.1:19092:19092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: 24
+    volumes: ["kafkadata:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+  topics:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists", "--topic", "votes.v1", "--partitions", "12", "--replication-factor", "1", "--config", "retention.ms=86400000"]
+  migrate:
+    build: .
+    image: voting:local
+    environment:
+      MODE: migrate
+      DATABASE_URL: postgres://voting:local-dev-only@postgres:5432/voting?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build: .
+    image: voting:local
+    ports: ["127.0.0.1:8080:8080", "127.0.0.1:9090:9090"]
+    environment: &app
+      MODE: api
+      DATABASE_URL: postgres://voting:local-dev-only@postgres:5432/voting?sslmode=disable
+      KAFKA_BROKERS: kafka:9092
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Run scripts/init-env.sh first}
+      SIGNING_KEY: ${SIGNING_KEY:?Run scripts/init-env.sh first}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      topics: {condition: service_completed_successfully}
+    stop_grace_period: 30s
+    restart: unless-stopped
+  worker:
+    build: .
+    image: voting:local
+    environment:
+      <<: *app
+      MODE: worker
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      topics: {condition: service_completed_successfully}
+    stop_grace_period: 30s
+    restart: unless-stopped
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.7.3
+    ports: ["127.0.0.1:9091:9090"]
+    volumes: ["./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+volumes:
+  pgdata: {}
+  kafkadata: {}

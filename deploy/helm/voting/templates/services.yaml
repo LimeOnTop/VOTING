@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "voting.name" . }}
+automountServiceAccountToken: false
+{{- range $component := list "api" "worker" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "voting.name" $ }}-{{ $component }}
+  labels:
+    {{- include "voting.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: {{ $component }}
+  ports:
+    {{- if eq $component "api" }}
+    - {name: http, port: 80, targetPort: http}
+    {{- end }}
+    - {name: metrics, port: 9090, targetPort: metrics}
+{{- end }}

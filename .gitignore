@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+bin/
+coverage.out
+*.log
+.DS_Store

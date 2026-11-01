@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: voting-api
+    static_configs:
+      - targets: ['api:9090']
+  - job_name: voting-worker
+    static_configs:
+      - targets: ['worker:9090']

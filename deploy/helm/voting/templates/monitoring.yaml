@@ -1,0 +1,39 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "voting.name" . }}
+  labels:
+    {{- include "voting.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: voting
+  endpoints:
+    - {port: metrics, interval: 15s}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "voting.name" . }}
+  labels:
+    {{- toYaml .Values.serviceMonitor.labels | nindent 4 }}
+spec:
+  groups:
+    - name: voting
+      rules:
+        - alert: VotingEnqueueFailures
+          expr: sum(rate(voting_http_requests_total{route="POST /api/polls/{id}/votes",status="Service Unavailable"}[2m])) > 1
+          for: 1m
+          labels: {severity: critical}
+          annotations: {summary: "Voting API cannot acknowledge ballots"}
+        - alert: VotingProjectionRetries
+          expr: sum(rate(voting_worker_events_total{outcome="retry"}[2m])) > 0
+          for: 2m
+          labels: {severity: warning}
+          annotations: {summary: "Vote projection is retrying database writes"}
+{{- end }}

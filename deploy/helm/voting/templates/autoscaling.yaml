@@ -1,0 +1,43 @@
+{{- if .Values.api.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "voting.name" . }}-api
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "voting.name" . }}-api}
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Percent, value: 100, periodSeconds: 30}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ .Values.api.autoscaling.cpu }}}
+{{- end }}
+{{- if .Values.worker.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "voting.name" . }}-worker
+spec:
+  scaleTargetRef: {name: {{ include "voting.name" . }}-worker}
+  minReplicaCount: {{ .Values.worker.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.worker.keda.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ .Values.config.kafkaBrokers | quote }}
+        consumerGroup: {{ .Values.config.kafkaGroup | quote }}
+        topic: {{ .Values.config.kafkaTopic | quote }}
+        lagThreshold: {{ .Values.worker.keda.lagThreshold | quote }}
+        offsetResetPolicy: earliest
+      authenticationRef:
+        name: {{ required "worker.keda.authenticationRef is required with KEDA" .Values.worker.keda.authenticationRef }}
+{{- end }}

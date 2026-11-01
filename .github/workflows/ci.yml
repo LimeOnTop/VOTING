@@ -1,0 +1,65 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: voting
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: voting_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U voting'
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://voting:test-only@localhost:5432/voting_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l cmd internal migrations)"
+      - run: go vet ./...
+      - run: go test -race -coverprofile=coverage.out ./...
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: npm, cache-dependency-path: web/package-lock.json}
+      - run: npm ci && npm run build && npm audit --audit-level=high
+        working-directory: web
+      - uses: azure/setup-helm@v4.3.0
+        with: {version: v3.18.6}
+      - run: |
+          helm lint deploy/helm/voting --strict --set image.tag=check
+          helm template voting deploy/helm/voting --set image.tag=check > /tmp/chart.yaml
+          helm template voting deploy/helm/voting --set image.tag=check --set ingress.enabled=true --set serviceMonitor.enabled=true --set worker.keda.enabled=true --set worker.keda.authenticationRef=test > /tmp/chart-all.yaml
+      - uses: actions/upload-artifact@v4
+        with: {name: coverage, path: coverage.out}
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/init-env.sh
+      - run: docker compose up --build -d
+      - name: Wait for readiness and test duplicate votes
+        run: |
+          for i in $(seq 1 60); do curl -fsS http://localhost:8080/readyz && break || sleep 2; done
+          set -a; . ./.env; set +a
+          python3 scripts/smoke.py
+          python3 scripts/recovery.py
+      - name: Diagnostics
+        if: failure()
+        run: docker compose logs --tail=100
+      - name: Stop local stack
+        if: always()
+        run: docker compose down -v
