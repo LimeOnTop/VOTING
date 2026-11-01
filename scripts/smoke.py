@@ -10,10 +10,10 @@ def request(path,body=None,opener=None,admin=False):
     with (opener.open(req,timeout=10) if opener else urllib.request.urlopen(req,timeout=10)) as r: return r.status,json.load(r)
 now=time.time()
 fmt=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
-_,poll=request('/api/admin/polls',{'question':'Какой транспорт вы выбираете?','type':'single','options':['Общественный','Личный','Пешком'],'opens_at':fmt(now-1),'closes_at':fmt(now+600)},admin=True)
-path='/api/polls/'+poll['id']
+_,poll=request('/api/v1/admin/polls',{'question':'Какой транспорт вы выбираете?','type':'single','options':['Общественный','Личный','Пешком'],'opens_at':fmt(now-1),'closes_at':fmt(now+600)},admin=True)
+path='/api/v1/polls/'+poll['id']
 jar=http.cookiejar.CookieJar();browser=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-request('/api/session',opener=browser)
+request('/api/v1/session',opener=browser)
 cookie='; '.join(c.name+'='+c.value for c in jar)
 def vote(n):
     req=urllib.request.Request(BASE+path+'/votes',data=json.dumps({'options':['1' if n%2==0 else '2']}).encode(),headers={'Content-Type':'application/json','Cookie':cookie})
@@ -32,9 +32,9 @@ for _ in range(60):
 else:raise AssertionError('projection timed out')
 # Also count one independent browser.
 other=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-request('/api/session',opener=other);request(path+'/votes',{'options':['3']},opener=other)
+request('/api/v1/session',opener=other);request(path+'/votes',{'options':['3']},opener=other)
 for _ in range(60):
-    _,result=request('/api/admin/polls/'+poll['id']+'/results',admin=True)
+    _,result=request('/api/v1/admin/polls/'+poll['id']+'/results',admin=True)
     if result['voters']==2:break
     time.sleep(.5)
 assert result['voters']==2,result

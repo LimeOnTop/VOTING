@@ -1,0 +1,418 @@
+basePath: /api/v1
+consumes:
+- application/json
+definitions:
+  controller.CreatePollRequest:
+    properties:
+      closes_at:
+        format: date-time
+        type: string
+      opens_at:
+        format: date-time
+        type: string
+      options:
+        items:
+          maxLength: 120
+          minLength: 1
+          type: string
+        maxItems: 10
+        minItems: 2
+        type: array
+        uniqueItems: true
+      question:
+        maxLength: 300
+        minLength: 1
+        type: string
+      type:
+        enum:
+        - single
+        - multiple
+        type: string
+    required:
+    - closes_at
+    - opens_at
+    - options
+    - question
+    - type
+    type: object
+  controller.ErrorResponse:
+    properties:
+      error:
+        example: опрос не найден
+        type: string
+    type: object
+  controller.ReceiptResponse:
+    properties:
+      options:
+        example:
+        - "1"
+        items:
+          type: string
+        type: array
+      status:
+        enum:
+        - accepted
+        - not_submitted_or_forgotten
+        type: string
+    type: object
+  controller.SessionResponse:
+    properties:
+      ready:
+        example: true
+        type: boolean
+    type: object
+  controller.VoteRequest:
+    properties:
+      options:
+        example:
+        - "1"
+        items:
+          type: string
+        maxItems: 10
+        minItems: 1
+        type: array
+        uniqueItems: true
+    required:
+    - options
+    type: object
+  controller.VoteResponse:
+    properties:
+      receipt_url:
+        example: /api/v1/polls/11111111111141118111111111111111/receipt
+        type: string
+      status:
+        enum:
+        - accepted
+        type: string
+    type: object
+  entity.Option:
+    properties:
+      id:
+        type: string
+      label:
+        type: string
+    type: object
+  entity.Poll:
+    properties:
+      closes_at:
+        format: date-time
+        type: string
+      created_at:
+        format: date-time
+        type: string
+      id:
+        type: string
+      opens_at:
+        format: date-time
+        type: string
+      options:
+        items:
+          $ref: '#/definitions/entity.Option'
+        type: array
+      question:
+        type: string
+      type:
+        type: string
+    type: object
+  entity.Result:
+    properties:
+      consistency:
+        type: string
+      counts:
+        additionalProperties:
+          format: int64
+          type: integer
+        type: object
+      poll:
+        $ref: '#/definitions/entity.Poll'
+      updated_at:
+        format: date-time
+        type: string
+        x-nullable: true
+      voters:
+        type: integer
+    type: object
+info:
+  contact: {}
+  description: Анонимные опросы, управление публикациями и обезличенные результаты.
+  title: VOTING API
+  version: "1.0"
+paths:
+  /admin/polls:
+    get:
+      parameters:
+      - default: 100
+        description: Размер страницы
+        in: query
+        maximum: 1000
+        minimum: 1
+        name: limit
+        type: integer
+      - default: 0
+        description: Смещение
+        in: query
+        minimum: 0
+        name: offset
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/entity.Poll'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      security:
+      - AdminBearer: []
+      summary: Получить список опросов
+      tags:
+      - Admin
+    post:
+      description: Публикует опрос с неизменяемыми вариантами и временем проведения.
+      parameters:
+      - description: Новый опрос
+        in: body
+        name: poll
+        required: true
+        schema:
+          $ref: '#/definitions/controller.CreatePollRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/entity.Poll'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      security:
+      - AdminBearer: []
+      summary: Создать опрос
+      tags:
+      - Admin
+  /admin/polls/{id}/results:
+    get:
+      description: Возвращает число участников и суммы по вариантам. Результаты обновляются
+        асинхронно.
+      parameters:
+      - description: Идентификатор опроса
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entity.Result'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      security:
+      - AdminBearer: []
+      summary: Получить результаты опроса
+      tags:
+      - Admin
+  /polls/{id}:
+    get:
+      parameters:
+      - description: Идентификатор опроса
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entity.Poll'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      summary: Получить опрос
+      tags:
+      - Polls
+  /polls/{id}/receipt:
+    get:
+      description: Статус accepted подтверждает приём ответа, а не завершение подсчёта.
+      parameters:
+      - description: Идентификатор опроса
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.ReceiptResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "428":
+          description: Precondition Required
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      security:
+      - BrowserCookie: []
+      summary: Получить подтверждение приёма
+      tags:
+      - Votes
+  /polls/{id}/votes:
+    post:
+      description: Принимает ответ в обработку. Первый учтённый ответ участника сохраняется
+        без возможности изменения.
+      parameters:
+      - description: Идентификатор опроса
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Выбранные варианты
+        in: body
+        name: answer
+        required: true
+        schema:
+          $ref: '#/definitions/controller.VoteRequest'
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controller.VoteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "425":
+          description: Too Early
+          headers:
+            Retry-After:
+              description: Задержка перед повторной попыткой в секундах
+              type: string
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "428":
+          description: Precondition Required
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          headers:
+            Retry-After:
+              description: Задержка перед повторной попыткой в секундах
+              type: string
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          headers:
+            Retry-After:
+              description: Задержка перед повторной попыткой в секундах
+              type: string
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      security:
+      - BrowserCookie: []
+      summary: Отправить ответ
+      tags:
+      - Votes
+  /session:
+    get:
+      description: Устанавливает cookie участника, если она отсутствует или недействительна.
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.SessionResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.ErrorResponse'
+      summary: Начать анонимную сессию
+      tags:
+      - Session
+produces:
+- application/json
+securityDefinitions:
+  AdminBearer:
+    description: Bearer <ADMIN_TOKEN>.
+    in: header
+    name: Authorization
+    type: apiKey
+  BrowserCookie:
+    description: Подписанная cookie voting_id, полученная через GET /api/v1/session.
+      Браузер передаёт её автоматически.
+    in: header
+    name: Cookie
+    type: apiKey
+swagger: "2.0"

@@ -8,18 +8,18 @@ def req(path,body=None,client=None,admin=False):
     r=urllib.request.Request(BASE+path,data=json.dumps(body).encode() if body else None,headers=headers)
     with (client.open(r,timeout=10) if client else urllib.request.urlopen(r,timeout=10)) as response:return json.load(response)
 fmt=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
-now=time.time();p=req('/api/admin/polls',{'question':'Проверка восстановления очереди','type':'single','options':['Да','Нет'],'opens_at':fmt(now-1),'closes_at':fmt(now+600)},admin=True)
-client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));req('/api/session',client=client)
+now=time.time();p=req('/api/v1/admin/polls',{'question':'Проверка восстановления очереди','type':'single','options':['Да','Нет'],'opens_at':fmt(now-1),'closes_at':fmt(now+600)},admin=True)
+client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));req('/api/v1/session',client=client)
 subprocess.run(['docker','compose','stop','worker'],check=True)
 try:
-    response=req('/api/polls/'+p['id']+'/votes',{'options':['1']},client)
+    response=req('/api/v1/polls/'+p['id']+'/votes',{'options':['1']},client)
     assert response['status']=='accepted',response
     time.sleep(1)
-    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    result=req('/api/v1/admin/polls/'+p['id']+'/results',admin=True)
     assert result['voters']==0,result
 finally:subprocess.run(['docker','compose','start','worker'],check=True)
 for _ in range(60):
-    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    result=req('/api/v1/admin/polls/'+p['id']+'/results',admin=True)
     if result['voters']==1:break
     time.sleep(.5)
 assert result['voters']==1,result
@@ -32,19 +32,19 @@ for _ in range(60):
         break
     except (OSError,urllib.error.HTTPError):time.sleep(.5)
 else:raise AssertionError('API did not become ready after restart')
-receipt=req('/api/polls/'+p['id']+'/receipt',client=client)
+receipt=req('/api/v1/polls/'+p['id']+'/receipt',client=client)
 assert receipt['status']=='not_submitted_or_forgotten',receipt
-response=req('/api/polls/'+p['id']+'/votes',{'options':['2']},client)
+response=req('/api/v1/polls/'+p['id']+'/votes',{'options':['2']},client)
 assert response['status']=='accepted',response
 # Wait for a new participant to reach the aggregate.
 other=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-req('/api/session',client=other)
-req('/api/polls/'+p['id']+'/votes',{'options':['2']},other)
+req('/api/v1/session',client=other)
+req('/api/v1/polls/'+p['id']+'/votes',{'options':['2']},other)
 for _ in range(60):
-    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    result=req('/api/v1/admin/polls/'+p['id']+'/results',admin=True)
     if result['voters']==2:break
     time.sleep(.5)
 time.sleep(2)
-result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+result=req('/api/v1/admin/polls/'+p['id']+'/results',admin=True)
 assert result['voters']==2 and result['counts']=={'1':1,'2':1},result
 print('PASS: API memory loss permits replay; worker preserves first answer and aggregate')

@@ -35,7 +35,7 @@ API подавляет повторы в памяти, отправляет го
 
 Cookie идентифицирует браузер, а не человека: её очистка позволяет проголосовать заново. Receipt подтверждает приём, не завершение подсчёта. Результаты согласуются асинхронно.
 
-Целевой сценарий — 100 млн голосов за минуту, около 1,67 млн RPS. Compose предназначен для разработки; промышленная пропускная способность не измерена. Слои приложения, кеши и расчёт масштабирования описаны в [архитектуре](docs/architecture.md).
+Слои приложения, обработка голосов и кеширование описаны в [архитектуре](docs/architecture.md).
 
 ## Проверки
 
@@ -65,10 +65,14 @@ k6 run -e POLL_ID=<id> -e RATE=100 -e DURATION=30s scripts/load.js
 
 ## Развёртывание и API
 
+HTTP API использует префикс `/api/v1`.
+
 - [Настройка окружения и Kubernetes / Helm](docs/operations.md).
 - [Маршруты и форматы ответов](docs/api.md).
-- [OpenAPI 3.0](api/openapi.json) для Swagger UI/Editor.
+- [Swagger 2.0](api/swagger.yml) для Swagger UI/Editor.
 
 Метрики API: <http://localhost:9090/metrics>. Локальный Prometheus запускается командой `docker compose --profile observability up -d prometheus` и доступен на <http://localhost:9091>.
 
 CI проверяет Go, frontend, зависимости, Helm и Compose smoke/recovery. Workflow `Publish image` публикует образ в GHCR с тегом commit SHA. Развёртывание выполняется отдельно.
+
+Документация генерируется из Swagger-аннотаций обработчиков командой `make swagger`.

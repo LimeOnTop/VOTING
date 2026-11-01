@@ -67,13 +67,13 @@ func (c *Controller) Handler() http.Handler {
 		}
 		c.respond(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
-	mux.HandleFunc("GET /api/session", c.session)
-	mux.HandleFunc("GET /api/polls/{id}", c.getPoll)
-	mux.HandleFunc("POST /api/polls/{id}/votes", c.vote)
-	mux.HandleFunc("GET /api/polls/{id}/receipt", c.receipt)
-	mux.HandleFunc("GET /api/admin/polls", c.admin(c.list))
-	mux.HandleFunc("POST /api/admin/polls", c.admin(c.create))
-	mux.HandleFunc("GET /api/admin/polls/{id}/results", c.admin(c.getResults))
+	mux.HandleFunc("GET /api/v1/session", c.session)
+	mux.HandleFunc("GET /api/v1/polls/{id}", c.getPoll)
+	mux.HandleFunc("POST /api/v1/polls/{id}/votes", c.vote)
+	mux.HandleFunc("GET /api/v1/polls/{id}/receipt", c.receipt)
+	mux.HandleFunc("GET /api/v1/admin/polls", c.admin(c.list))
+	mux.HandleFunc("POST /api/v1/admin/polls", c.admin(c.create))
+	mux.HandleFunc("GET /api/v1/admin/polls/{id}/results", c.admin(c.getResults))
 	mux.HandleFunc("/", c.static)
 	return c.middleware(mux)
 }
@@ -85,7 +85,7 @@ func (c *Controller) respond(w http.ResponseWriter, status int, value any) {
 	}
 }
 func (c *Controller) fail(w http.ResponseWriter, status int, message string) {
-	c.respond(w, status, map[string]string{"error": message})
+	c.respond(w, status, ErrorResponse{Error: message})
 }
 func (c *Controller) error(w http.ResponseWriter, err error) {
 	var validation *apperr.Validation
@@ -133,6 +133,13 @@ func (c *Controller) browserID(r *http.Request) (string, error) {
 	}
 	return c.identity.ParseToken(cookie.Value)
 }
+
+// @Summary Начать анонимную сессию
+// @Description Устанавливает cookie участника, если она отсутствует или недействительна.
+// @Tags Session
+// @Success 200 {object} SessionResponse
+// @Failure 503 {object} ErrorResponse
+// @Router /session [get]
 func (c *Controller) session(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if _, err := c.browserID(r); err != nil {
@@ -143,8 +150,15 @@ func (c *Controller) session(w http.ResponseWriter, r *http.Request) {
 		}
 		http.SetCookie(w, &http.Cookie{Name: c.options.CookieName, Value: token, Path: "/", HttpOnly: true, Secure: c.options.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: int(c.options.CookieMaxAge / time.Second)})
 	}
-	c.respond(w, http.StatusOK, map[string]bool{"ready": true})
+	c.respond(w, http.StatusOK, SessionResponse{Ready: true})
 }
+
+// @Summary Получить опрос
+// @Tags Polls
+// @Param id path string true "Идентификатор опроса"
+// @Success 200 {object} entity.Poll
+// @Failure 404,429,503 {object} ErrorResponse
+// @Router /polls/{id} [get]
 func (c *Controller) getPoll(w http.ResponseWriter, r *http.Request) {
 	poll, err := c.polls.GetByID(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -154,6 +168,17 @@ func (c *Controller) getPoll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(c.options.MetadataMaxAge/time.Second)))
 	c.respond(w, http.StatusOK, poll)
 }
+
+// @Summary Отправить ответ
+// @Description Принимает ответ в обработку. Первый учтённый ответ участника сохраняется без возможности изменения.
+// @Tags Votes
+// @Security BrowserCookie
+// @Param id path string true "Идентификатор опроса"
+// @Param answer body VoteRequest true "Выбранные варианты"
+// @Success 202 {object} VoteResponse
+// @Failure 400,403,409,422,425,428,429,503 {object} ErrorResponse
+// @Header 425,429,503 {string} Retry-After "Задержка перед повторной попыткой в секундах"
+// @Router /polls/{id}/votes [post]
 func (c *Controller) vote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !c.health.Ready() {
@@ -165,9 +190,7 @@ func (c *Controller) vote(w http.ResponseWriter, r *http.Request) {
 		c.error(w, err)
 		return
 	}
-	var input struct {
-		Options []string `json:"options"`
-	}
+	var input VoteRequest
 	if err = c.decode(w, r, &input); err != nil {
 		c.fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -176,8 +199,17 @@ func (c *Controller) vote(w http.ResponseWriter, r *http.Request) {
 		c.error(w, err)
 		return
 	}
-	c.respond(w, http.StatusAccepted, map[string]string{"status": "accepted", "receipt_url": "/api/polls/" + r.PathValue("id") + "/receipt"})
+	c.respond(w, http.StatusAccepted, VoteResponse{Status: "accepted", ReceiptURL: "/api/v1/polls/" + r.PathValue("id") + "/receipt"})
 }
+
+// @Summary Получить подтверждение приёма
+// @Description Статус accepted подтверждает приём ответа, а не завершение подсчёта.
+// @Tags Votes
+// @Security BrowserCookie
+// @Param id path string true "Идентификатор опроса"
+// @Success 200 {object} ReceiptResponse
+// @Failure 404,428,503 {object} ErrorResponse
+// @Router /polls/{id}/receipt [get]
 func (c *Controller) receipt(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	browser, err := c.browserID(r)
@@ -191,24 +223,42 @@ func (c *Controller) receipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if options == nil {
-		c.respond(w, http.StatusOK, map[string]string{"status": "not_submitted_or_forgotten"})
+		c.respond(w, http.StatusOK, ReceiptResponse{Status: "not_submitted_or_forgotten"})
 		return
 	}
-	c.respond(w, http.StatusOK, map[string]any{"status": "accepted", "options": options})
+	c.respond(w, http.StatusOK, ReceiptResponse{Status: "accepted", Options: options})
 }
+
+// @Summary Создать опрос
+// @Description Публикует опрос с неизменяемыми вариантами и временем проведения.
+// @Tags Admin
+// @Security AdminBearer
+// @Param poll body CreatePollRequest true "Новый опрос"
+// @Success 201 {object} entity.Poll
+// @Failure 400,401,403,422,503 {object} ErrorResponse
+// @Router /admin/polls [post]
 func (c *Controller) create(w http.ResponseWriter, r *http.Request) {
-	var input entity.CreatePoll
+	var input CreatePollRequest
 	if err := c.decode(w, r, &input); err != nil {
 		c.fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	poll, err := c.polls.Create(r.Context(), input)
+	poll, err := c.polls.Create(r.Context(), entity.CreatePoll{Question: input.Question, Type: input.Type, Options: input.Options, OpensAt: input.OpensAt, ClosesAt: input.ClosesAt})
 	if err != nil {
 		c.error(w, err)
 		return
 	}
 	c.respond(w, http.StatusCreated, poll)
 }
+
+// @Summary Получить список опросов
+// @Tags Admin
+// @Security AdminBearer
+// @Param limit query int false "Размер страницы" default(100) minimum(1) maximum(1000)
+// @Param offset query int false "Смещение" default(0) minimum(0)
+// @Success 200 {array} entity.Poll
+// @Failure 400,401,422,503 {object} ErrorResponse
+// @Router /admin/polls [get]
 func (c *Controller) list(w http.ResponseWriter, r *http.Request) {
 	limit, err := paginationInt(r, "limit")
 	if err != nil {
@@ -234,6 +284,15 @@ func paginationInt(r *http.Request, name string) (int, error) {
 	}
 	return strconv.Atoi(value)
 }
+
+// @Summary Получить результаты опроса
+// @Description Возвращает число участников и суммы по вариантам. Результаты обновляются асинхронно.
+// @Tags Admin
+// @Security AdminBearer
+// @Param id path string true "Идентификатор опроса"
+// @Success 200 {object} entity.Result
+// @Failure 401,404,429,503 {object} ErrorResponse
+// @Router /admin/polls/{id}/results [get]
 func (c *Controller) getResults(w http.ResponseWriter, r *http.Request) {
 	result, err := c.results.Get(r.Context(), r.PathValue("id"))
 	if err != nil {

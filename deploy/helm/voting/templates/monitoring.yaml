@@ -27,7 +27,7 @@ spec:
     - name: voting
       rules:
         - alert: VotingEnqueueFailures
-          expr: sum(rate(voting_http_requests_total{route="POST /api/polls/{id}/votes",status="Service Unavailable"}[2m])) > 1
+          expr: sum(rate(voting_http_requests_total{route="POST /api/v1/polls/{id}/votes",status="Service Unavailable"}[2m])) > 1
           for: 1m
           labels: {severity: critical}
           annotations: {summary: "Voting API cannot acknowledge ballots"}

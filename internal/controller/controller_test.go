@@ -51,7 +51,15 @@ func TestHTTPBoundaries(t *testing.T) {
 		}
 	})
 	handler := c.Handler()
-	for _, route := range []string{"/api/admin/polls", "/api/admin/polls/id/results"} {
+	for _, route := range []string{"/api/session", "/api/polls/id", "/api/admin/polls"} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, route, nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("removed route %s returned %d", route, w.Code)
+		}
+	}
+
+	for _, route := range []string{"/api/v1/admin/polls", "/api/v1/admin/polls/id/results"} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, route, nil)
 		req.Header.Set("Authorization", "Bearer invalid")
 		res := httptest.NewRecorder()
@@ -60,14 +68,14 @@ func TestHTTPBoundaries(t *testing.T) {
 			t.Fatalf("admin guard: %d %v", res.Code, res.Header())
 		}
 	}
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/session", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/session", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	cookies := res.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unsafe cookie: %v", cookies)
 	}
-	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/admin/polls", strings.NewReader("{}"))
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/admin/polls", strings.NewReader("{}"))
 	req.Header.Set("Origin", "https://other.example")
 	req.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 24))
 	res = httptest.NewRecorder()
