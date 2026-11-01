@@ -24,8 +24,7 @@ for _ in range(60):
     time.sleep(.5)
 assert result['voters']==1,result
 print('PASS: durable acceptance while worker stopped; exactly one vote after restart')
-# Lose API memory, then retry the same identity with a different choice.
-# The second 202 is allowed; the worker must preserve the first aggregate.
+# A retry after API memory loss must preserve the first result.
 subprocess.run(['docker','compose','restart','api'],check=True)
 for _ in range(60):
     try:
@@ -37,7 +36,7 @@ receipt=req('/api/polls/'+p['id']+'/receipt',client=client)
 assert receipt['status']=='not_submitted_or_forgotten',receipt
 response=req('/api/polls/'+p['id']+'/votes',{'options':['2']},client)
 assert response['status']=='accepted',response
-# Follow-up independent identity ensures the projection continues processing.
+# Wait for a new participant to reach the aggregate.
 other=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 req('/api/session',client=other)
 req('/api/polls/'+p['id']+'/votes',{'options':['2']},other)

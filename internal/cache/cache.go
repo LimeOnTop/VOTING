@@ -1,5 +1,4 @@
-// Package cache implements bounded local read-model adapters. It never owns
-// vote uniqueness: the durable vote repository remains authoritative.
+// Package cache provides bounded local caches and duplicate suppression.
 package cache
 
 import (
@@ -115,8 +114,7 @@ func (c *local[T]) publish(key string, v record[T], ttl time.Duration, preferFre
 	return v
 }
 
-// load retains a bounded, cancellation-independent shared request. Waiting
-// callers can cancel without aborting the load other callers are sharing.
+// Caller cancellation must not cancel a shared load.
 func (c *local[T]) load(ctx context.Context, key string, loader func(context.Context) (T, error), ttl func(T, error) time.Duration) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {

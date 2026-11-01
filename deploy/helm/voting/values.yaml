@@ -1,13 +1,11 @@
 image:
   repository: ghcr.io/limeontop/voting
-  tag: "" # Required: CI commit SHA. Never deploy mutable latest.
+  tag: "" # Required image version or commit SHA.
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 apiSecret: voting-api-secrets
 workerSecret: voting-worker-secrets
 migrationSecret: voting-migration-secrets
-# Each profile supplies its own DATABASE_URL/VOTE_DATABASE_URLS and Kafka ACL credentials.
-# Only the API receives ADMIN_TOKEN and SIGNING_KEY.
 config:
   kafkaBrokers: kafka.kafka.svc.cluster.local:9092
   kafkaTopic: votes.v1
@@ -42,7 +40,6 @@ worker:
 ingress:
   enabled: false
   className: haproxy
-  # HAProxy Kubernetes Ingress Controller; nginx is an explicit legacy option.
   sticky:
     enabled: true
     provider: haproxy

@@ -1,5 +1,4 @@
-// Package app is the composition root. It is the only place that knows both
-// application ports and concrete infrastructure implementations.
+// Package app wires dependencies and manages their lifecycle.
 package app
 
 import (
@@ -132,8 +131,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// Intake readiness depends on metadata and Kafka, not projection shard health.
-	// A temporary projection outage accumulates durable messages instead of denying votes.
+	// Projection shard failures must not stop durable intake.
 	health, err := service.NewHealthService([]usecase.HealthCheck{metadata, publisher}, service.HealthOptions{Interval: cfg.HealthInterval, Timeout: cfg.HealthTimeout})
 	if err != nil {
 		return err

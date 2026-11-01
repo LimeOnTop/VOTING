@@ -8,8 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Migrate is invoked exclusively by the one-off migration process. Application
-// repositories never create schema and can run with DML-only SQL identities.
+// Migrate runs only in MODE=migrate.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {

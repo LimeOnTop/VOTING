@@ -14,8 +14,6 @@ import (
 	"testing"
 )
 
-// Rules describe the permitted direction of application dependencies. Concrete
-// adapters meet at the composition root, never through service implementations.
 var inward = map[string]map[string]bool{
 	"apperr":        {},
 	"entity":        {"apperr": true},
@@ -84,8 +82,7 @@ func dependencyViolation(module, layer, path string) string {
 		}
 		return fmt.Sprintf("%s must depend on an inward port, not concrete %s", layer, target)
 	}
-	// Domain/application packages remain independent of any external framework.
-	// Adapters may use frameworks for their own responsibility only.
+
 	first := strings.Split(path, "/")[0]
 	if isInner(layer) && strings.Contains(first, ".") {
 		return "domain and application layers cannot import external frameworks"
@@ -135,8 +132,7 @@ func TestNoImplicitDependencyInitialization(t *testing.T) {
 			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "init" {
 				t.Errorf("%s: construct dependencies explicitly; init() hides wiring", path)
 			}
-			// Sentinel errors and compile-time interface assertions are fine. An inner
-			// package must not initialize a database, client or clock at package load.
+			// Allow declarations, not runtime dependency initialization.
 			group, ok := decl.(*ast.GenDecl)
 			if !ok || group.Tok != token.VAR || !isInner(layer) {
 				continue

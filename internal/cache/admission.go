@@ -11,8 +11,7 @@ import (
 	"github.com/LimeOnTop/VOTING/internal/usecase"
 )
 
-// Admission stores only poll-scoped pseudonyms; Kafka remains the durable boundary.
-// Active entries are never evicted to make space: a full segment rejects intake.
+// Admission rejects new keys when full instead of evicting active identities.
 type Admission struct {
 	shards []admissionShard
 	seed   maphash.Seed
@@ -70,8 +69,7 @@ func NewAdmission(capacity, shards int, clock usecase.Clock) (*Admission, error)
 	return a, nil
 }
 
-// Reserve atomically blocks concurrent requests for the same identity. The caller
-// must finish exactly once: true only after durable publish, false on any failure.
+// Reserve returns a completion callback: true after ACK, false on failure.
 func (a *Admission) Reserve(key string, options []string, expires time.Time) (func(bool), error) {
 	s := &a.shards[maphash.String(a.seed, key)%uint64(len(a.shards))]
 	s.mu.Lock()

@@ -3,20 +3,16 @@ updates:
   - package-ecosystem: gomod
     directory: /
     schedule: {interval: weekly}
-    # Version updates are submitted through feature/* branches.
     open-pull-requests-limit: 0
   - package-ecosystem: npm
     directory: /web
     schedule: {interval: weekly}
-    # Version updates are submitted through feature/* branches.
     open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
-    # Version updates are submitted through feature/* branches.
     open-pull-requests-limit: 0
   - package-ecosystem: docker
     directory: /
     schedule: {interval: weekly}
-    # Version updates are submitted through feature/* branches.
     open-pull-requests-limit: 0

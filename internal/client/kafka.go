@@ -18,8 +18,6 @@ import (
 	"github.com/segmentio/kafka-go/sasl/plain"
 )
 
-// KafkaOptions is supplied by the composition root. There are no implicit
-// application defaults here: operational sizes and deadlines are configurable.
 type KafkaOptions struct {
 	Brokers                                []string
 	Topic, Group                           string
@@ -101,8 +99,7 @@ type messageWriter interface {
 	Close() error
 }
 
-// VotePublisher acknowledges a request only after Kafka confirms the write.
-// Kafka delivery can repeat; the projection repository provides idempotency.
+// VotePublisher waits for durable ACK; the worker handles duplicate delivery.
 type VotePublisher struct {
 	writer    messageWriter
 	health    *kafkaHealth
@@ -146,8 +143,7 @@ type messageReader interface {
 	Close() error
 }
 
-// VoteConsumer keeps fetched positions uncommitted until the service commits
-// the entire database batch, including every configured storage shard.
+// VoteConsumer leaves positions uncommitted until all SQL shards succeed.
 type VoteConsumer struct {
 	reader    messageReader
 	options   KafkaOptions
@@ -182,8 +178,7 @@ func (c *VoteConsumer) FetchBatch(ctx context.Context) ([]usecase.Delivery, erro
 	}
 	batch := make([]usecase.Delivery, 0, c.options.ConsumerBatchSize)
 	batch = append(batch, delivery)
-	// The collection window begins only after the first message, so an idle
-	// consumer blocks without generating empty SQL batches or polling loops.
+	// Start the batch window after the first message.
 	window, cancel := context.WithTimeout(ctx, c.options.ConsumerBatchWait)
 	defer cancel()
 	for len(batch) < c.options.ConsumerBatchSize {
@@ -220,8 +215,7 @@ func (c *VoteConsumer) Commit(ctx context.Context, positions []usecase.Position)
 	if len(positions) == 0 {
 		return nil
 	}
-	// Advancing the maximum acknowledges all earlier fetched offsets in each
-	// partition. The service must call this only after the whole batch succeeds.
+	// A maximum offset also acknowledges earlier messages in that partition.
 	type partition struct {
 		topic string
 		id    int
@@ -270,8 +264,7 @@ type kafkaHealth struct {
 func newHealth(o KafkaOptions, t *kafka.Transport) *kafkaHealth {
 	client := &kafka.Client{Transport: t}
 	return &kafkaHealth{brokers: o.Brokers, timeout: o.DialTimeout, probe: func(ctx context.Context, addr string) error {
-		// Client.Metadata does not request topic auto-creation, unlike the legacy
-		// Conn.ReadPartitions helper. Runtime credentials need describe access only.
+		// Metadata must not request topic creation.
 		result, err := client.Metadata(ctx, &kafka.MetadataRequest{Addr: kafka.TCP(addr), Topics: []string{o.Topic}})
 		if err != nil {
 			return err
