@@ -50,6 +50,8 @@ jobs:
       - run: |
           helm lint deploy/helm/voting --strict --set image.tag=check
           helm template voting deploy/helm/voting --set image.tag=check > /tmp/chart.yaml
+          if helm template voting deploy/helm/voting --set image.tag=check --set api.autoscaling.minReplicas=25 --set api.autoscaling.maxReplicas=20 > /dev/null 2>&1; then exit 1; fi
+          if helm template voting deploy/helm/voting --set image.tag=check --set worker.keda.enabled=true --set worker.keda.minReplicas=13 --set worker.keda.maxReplicas=12 --set worker.keda.authenticationRef=test > /dev/null 2>&1; then exit 1; fi
           helm template voting deploy/helm/voting --set image.tag=check --set ingress.enabled=true --set serviceMonitor.enabled=true --set worker.keda.enabled=true --set worker.keda.authenticationRef=test > /tmp/chart-all.yaml
       - uses: actions/upload-artifact@v4
         with: {name: coverage, path: coverage.out}
@@ -62,7 +64,12 @@ jobs:
       - run: docker compose up --build -d
       - name: Wait for readiness and test duplicate votes
         run: |
-          for i in $(seq 1 60); do curl -fsS http://localhost:8080/readyz && break || sleep 2; done
+          ready=false
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://localhost:8080/readyz; then ready=true; break; fi
+            sleep 2
+          done
+          test "$ready" = true
           set -a; . ./.env; set +a
           python3 scripts/smoke.py
           python3 scripts/recovery.py
