@@ -1,5 +1,4 @@
-// Package config is the environment boundary. Operational defaults live here,
-// never inside application services or persistence adapters.
+// Package config reads and validates environment settings.
 package config
 
 import (

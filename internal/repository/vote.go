@@ -16,7 +16,6 @@ import (
 	"github.com/LimeOnTop/VOTING/internal/usecase"
 )
 
-// VoteOptions contains deployment parameters, not business rules.
 type VoteOptions struct {
 	CounterShards   int
 	ReadConcurrency int
@@ -58,11 +57,8 @@ func hashKey(key string) uint32 {
 	return h.Sum32()
 }
 
-// The ordered physical shard list MUST remain fixed for existing ballots.
-// Adding/reordering a database requires a routing epoch and migration; changing
-// the modulus in-place would send retries and receipts to the wrong database.
+// Changing shard order/count requires a data-routing migration.
 func (r *VoteRepository) shardFor(pollID, voterKey string) int {
-	// The remainder is bounded by the positive slice length and therefore fits int.
 	return int(uint64(hashKey(pollID+":"+voterKey)) % uint64(len(r.pools))) //nolint:gosec // G115: bounded by len(r.pools).
 }
 
@@ -75,10 +71,7 @@ type ballotRow struct {
 	Ordinal      int       `json:"ordinal"`
 }
 
-// Each shard receives a whole microbatch in one set-based statement. DISTINCT ON
-// selects the first delivered ballot before the uniqueness constraint handles
-// concurrent or previously committed deliveries. Counter and progress writes
-// depend on inserted rows only and share the transaction with those rows.
+// Count only newly inserted keys; DISTINCT ON keeps the first answer in a batch.
 const applyBallotsSQL = `
 WITH incoming AS (
  SELECT DISTINCT ON (poll_id,voter_key)
@@ -143,7 +136,6 @@ func (r *VoteRepository) ApplyBatch(ctx context.Context, votes []entity.Vote, po
 			return 0, fmt.Errorf("immutable metadata missing for poll %s", vote.PollID)
 		}
 		shard := r.shardFor(vote.PollID, vote.VoterKey)
-		// CounterShards is validated positive and <=32768 by the constructor.
 		batches[shard] = append(batches[shard], ballotRow{PollID: vote.PollID, VoterKey: vote.VoterKey, Options: vote.Options, AcceptedAt: vote.AcceptedAt, CounterShard: int(uint64(hashKey(vote.VoterKey)) % uint64(r.options.CounterShards)), Ordinal: ordinal}) //nolint:gosec // G115: positive constructor-validated counter modulus.
 		if shardPolls[shard] == nil {
 			shardPolls[shard] = map[string]entity.Poll{}
@@ -165,10 +157,7 @@ func (r *VoteRepository) ApplyBatch(ctx context.Context, votes []entity.Vote, po
 			return counted, fmt.Errorf("apply vote shard %d: %w", shard, err)
 		}
 	}
-	// Cross-shard transactions are deliberately independent. If a later shard
-	// fails, callers replay the whole batch before committing Kafka positions.
-	// The returned count is newly inserted rows in this attempt, not a durable
-	// global tally; use Results for authoritative totals.
+	// Partial commits require replay. The count covers this attempt only.
 	return counted, nil
 }
 
@@ -192,9 +181,7 @@ func (r *VoteRepository) applyShard(ctx context.Context, pool *pgxpool.Pool, bat
 			err = errors.Join(err, fmt.Errorf("rollback projection: %w", cleanupErr))
 		}
 	}()
-	// Metadata is repeated once per distinct poll per shard microbatch. It costs
-	// one bounded round trip, avoids process-local unbounded seen-poll maps and
-	// allows vote shards to preserve the foreign key without cross-database SQL.
+	// Copy poll metadata to satisfy the shard-local foreign key.
 	if _, err = tx.Exec(bounded, ensurePollsSQL, metadata); err != nil {
 		return 0, fmt.Errorf("ensure projection metadata: %w", err)
 	}
