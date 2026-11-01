@@ -1,4 +1,4 @@
-package domain
+package entity
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 func TestValidation(t *testing.T) {
 	now := time.Now()
 	base := CreatePoll{Question: "Вопрос?", Type: "single", Options: []string{"Да", "Нет"}, OpensAt: now.Add(-time.Minute), ClosesAt: now.Add(time.Minute)}
-	p, err := NewPoll(base, now)
+	p, err := NewPoll(base, "test-poll", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestValidation(t *testing.T) {
 		})
 	}
 	base.Type = "multiple"
-	p, err = NewPoll(base, now)
+	p, err = NewPoll(base, "test-poll", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.Options = []string{" Да ", "да"}
-	if _, err = NewPoll(base, now); err == nil {
+	if _, err = NewPoll(base, "test-poll", now); err == nil {
 		t.Fatal("duplicate labels accepted")
 	}
 }

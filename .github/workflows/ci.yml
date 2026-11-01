@@ -11,6 +11,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17.6-alpine
@@ -33,6 +34,12 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal migrations)"
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
+      - name: Go security advisories
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Go lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
       - uses: actions/setup-node@v4
         with: {node-version: '22', cache: npm, cache-dependency-path: web/package-lock.json}
       - run: npm ci && npm run build && npm audit --audit-level=high
@@ -47,6 +54,7 @@ jobs:
         with: {name: coverage, path: coverage.out}
   smoke:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - run: ./scripts/init-env.sh
