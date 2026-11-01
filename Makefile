@@ -1,6 +1,9 @@
 .PHONY: init up down test integration lint security web helm swagger check
 init:
-	./scripts/init-env.sh
+	@set -eu; if [ ! -e .env ]; then \
+		umask 077; \
+		printf 'ADMIN_TOKEN=%s\nSIGNING_KEY=%s\nCOOKIE_SECURE=false\n' "$$(openssl rand -hex 24)" "$$(openssl rand -hex 32)" > .env; \
+	fi
 up: init
 	docker compose up --build -d
 down:
