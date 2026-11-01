@@ -4,6 +4,8 @@ package apperr
 import "errors"
 
 var (
+	ErrAlreadyVoted    = errors.New("вы уже проголосовали в этом опросе")
+	ErrVotePending     = errors.New("предыдущая отправка ещё выполняется; повторите запрос позже")
 	ErrNotFound        = errors.New("опрос не найден")
 	ErrInvalidIdentity = errors.New("сначала разрешите cookie и откройте страницу голосования")
 	ErrOverloaded      = errors.New("сервис занят; повторите запрос позже")

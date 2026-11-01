@@ -31,6 +31,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - run: python3 -m json.tool api/openapi.json > /dev/null
       - run: test -z "$(gofmt -l cmd internal migrations)"
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...

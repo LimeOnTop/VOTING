@@ -22,6 +22,9 @@ func (IDs) NewID() (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", fmt.Errorf("random id: %w", err)
 	}
+	// RFC 9562 UUIDv4, encoded as compact hexadecimal for stable existing URLs/cookies.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
 	return hex.EncodeToString(b[:]), nil
 }
 

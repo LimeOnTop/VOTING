@@ -116,11 +116,15 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	readCache, err := cache.NewVoteReadRepository(votes, cache.ResultOptions{Capacity: cfg.Cache.Capacity, Shards: cfg.Cache.Shards, ResultsTTL: cfg.Cache.ResultsTTL, ReceiptTTL: cfg.Cache.ReceiptTTL, LoadTimeout: cfg.Cache.LoadTimeout, MaxLoads: cfg.Cache.MaxLoads}, clock, metrics)
+	readCache, err := cache.NewVoteReadRepository(votes, cache.ResultOptions{Capacity: cfg.Cache.Capacity, Shards: cfg.Cache.Shards, ResultsTTL: cfg.Cache.ResultsTTL, LoadTimeout: cfg.Cache.LoadTimeout, MaxLoads: cfg.Cache.MaxLoads}, clock, metrics)
 	if err != nil {
 		return err
 	}
-	votingService, err := service.NewVoteService(pollService, publisher, readCache, identity, clock, metrics, service.VoteOptions{EnqueueTimeout: cfg.EnqueueTimeout, QueryTimeout: cfg.QueryTimeout, MaxInFlight: cfg.HTTP.MaxInFlight})
+	admission, err := cache.NewAdmission(cfg.Cache.DedupCapacity, cfg.Cache.Shards, clock)
+	if err != nil {
+		return err
+	}
+	votingService, err := service.NewVoteService(pollService, publisher, admission, identity, clock, metrics, service.VoteOptions{EnqueueTimeout: cfg.EnqueueTimeout, MaxInFlight: cfg.HTTP.MaxInFlight, DedupRetention: cfg.Cache.DedupRetention})
 	if err != nil {
 		return err
 	}

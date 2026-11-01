@@ -27,8 +27,8 @@ type Kafka struct {
 	ProducerBatchSize, ConsumerBatchSize, MinBytes, MaxBytes                     int
 }
 type Cache struct {
-	Capacity, Shards, MaxLoads                                int
-	PollTTL, NegativeTTL, ResultsTTL, ReceiptTTL, LoadTimeout time.Duration
+	Capacity, Shards, MaxLoads, DedupCapacity                     int
+	PollTTL, NegativeTTL, ResultsTTL, LoadTimeout, DedupRetention time.Duration
 }
 type HTTP struct {
 	Address, MetricsAddress, WebDir, CookieName                                                             string
@@ -124,7 +124,7 @@ func LoadWithLookup(lookup func(string) (string, bool)) (Config, error) {
 		c.Database.VoteURLs = []string{c.Database.URL}
 	}
 	c.Kafka = Kafka{Brokers: list(r.text("KAFKA_BROKERS", "localhost:19092")), Topic: r.text("KAFKA_TOPIC", "votes.v1"), Group: r.text("KAFKA_GROUP", "voting-projector-v1"), Username: r.text("KAFKA_USER", ""), Password: r.text("KAFKA_PASSWORD", ""), TLS: r.boolean("KAFKA_TLS", "false"), DialTimeout: r.duration("KAFKA_DIAL_TIMEOUT", "3s"), ReadTimeout: r.duration("KAFKA_READ_TIMEOUT", "5s"), WriteTimeout: r.duration("KAFKA_WRITE_TIMEOUT", "5s"), ProducerBatchWait: r.duration("KAFKA_PRODUCER_BATCH_WAIT", "5ms"), ConsumerBatchWait: r.duration("KAFKA_CONSUMER_BATCH_WAIT", "25ms"), ProducerBatchSize: r.integer("KAFKA_PRODUCER_BATCH_SIZE", "1000"), ConsumerBatchSize: r.integer("KAFKA_CONSUMER_BATCH_SIZE", "500"), MinBytes: r.integer("KAFKA_FETCH_MIN_BYTES", "1"), MaxBytes: r.integer("KAFKA_FETCH_MAX_BYTES", "10000000")}
-	c.Cache = Cache{Capacity: r.integer("CACHE_CAPACITY", "10000"), Shards: r.integer("CACHE_SHARDS", "64"), MaxLoads: r.integer("CACHE_MAX_LOADS", "32"), PollTTL: r.duration("CACHE_POLL_TTL", "5m"), NegativeTTL: r.duration("CACHE_NEGATIVE_TTL", "2s"), ResultsTTL: r.duration("CACHE_RESULTS_TTL", "1s"), ReceiptTTL: r.duration("CACHE_RECEIPT_TTL", "2m"), LoadTimeout: r.duration("CACHE_LOAD_TIMEOUT", "2s")}
+	c.Cache = Cache{DedupCapacity: r.integer("DEDUP_CAPACITY", "1000000"), DedupRetention: r.duration("DEDUP_RETENTION", "1h"), Capacity: r.integer("CACHE_CAPACITY", "10000"), Shards: r.integer("CACHE_SHARDS", "64"), MaxLoads: r.integer("CACHE_MAX_LOADS", "32"), PollTTL: r.duration("CACHE_POLL_TTL", "5m"), NegativeTTL: r.duration("CACHE_NEGATIVE_TTL", "2s"), ResultsTTL: r.duration("CACHE_RESULTS_TTL", "1s"), LoadTimeout: r.duration("CACHE_LOAD_TIMEOUT", "2s")}
 	c.HTTP = HTTP{Address: r.text("ADDR", ":8080"), MetricsAddress: r.text("METRICS_ADDR", ":9090"), WebDir: r.text("WEB_DIR", "web/dist"), CookieName: r.text("COOKIE_NAME", "voting_id"), SecureCookie: r.boolean("COOKIE_SECURE", "true"), CookieMaxAge: r.duration("COOKIE_MAX_AGE", "720h"), MetadataMaxAge: r.duration("METADATA_MAX_AGE", "30s"), MaxBodyBytes: int64(r.integer("HTTP_MAX_BODY_BYTES", "8192")), MaxInFlight: r.integer("VOTE_MAX_IN_FLIGHT", "1024"), DefaultPageSize: r.integer("POLL_PAGE_SIZE", "100"), MaxPageSize: r.integer("POLL_MAX_PAGE_SIZE", "1000"), RequestTimeout: r.duration("HTTP_REQUEST_TIMEOUT", "10s"), ReadHeaderTimeout: r.duration("HTTP_READ_HEADER_TIMEOUT", "3s"), ReadTimeout: r.duration("HTTP_READ_TIMEOUT", "10s"), WriteTimeout: r.duration("HTTP_WRITE_TIMEOUT", "12s"), IdleTimeout: r.duration("HTTP_IDLE_TIMEOUT", "60s"), MaxHeaderBytes: r.integer("HTTP_MAX_HEADER_BYTES", "16384")}
 	c.QueryTimeout = r.duration("QUERY_TIMEOUT", "2s")
 	c.EnqueueTimeout = r.duration("ENQUEUE_TIMEOUT", "6s")
@@ -164,7 +164,7 @@ func LoadWithLookup(lookup func(string) (string, bool)) (Config, error) {
 	if c.Database.MinConnections > c.Database.MaxConnections || c.Database.CounterShards > 1<<15 || c.Database.StatementTimeout < time.Millisecond || c.Database.LockTimeout < time.Millisecond {
 		return Config{}, fmt.Errorf("invalid database pool or counter shard limits")
 	}
-	if c.Cache.Shards > c.Cache.Capacity {
+	if c.Cache.Shards > c.Cache.Capacity || c.Cache.Shards > c.Cache.DedupCapacity {
 		return Config{}, fmt.Errorf("CACHE_SHARDS must not exceed CACHE_CAPACITY")
 	}
 	if c.HTTP.MaxPageSize < c.HTTP.DefaultPageSize || c.HTTP.MetadataMaxAge > c.Cache.PollTTL || c.HTTP.WriteTimeout < c.HTTP.RequestTimeout {

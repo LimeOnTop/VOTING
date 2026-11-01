@@ -92,16 +92,9 @@ func (fakeIdentity) ParseToken(string) (string, error)    { return "browser", ni
 func (fakeIdentity) VoterKey(poll, browser string) string { return poll + ":" + browser }
 
 type fakeReadRepository struct {
-	receipt func(context.Context, string, string) ([]string, error)
-	result  func(context.Context, entity.Poll) (entity.Result, error)
+	result func(context.Context, entity.Poll) (entity.Result, error)
 }
 
-func (r fakeReadRepository) Receipt(ctx context.Context, p, k string) ([]string, error) {
-	if r.receipt == nil {
-		return nil, errors.New("unexpected receipt")
-	}
-	return r.receipt(ctx, p, k)
-}
 func (r fakeReadRepository) Results(ctx context.Context, p entity.Poll) (entity.Result, error) {
 	if r.result == nil {
 		return entity.Result{}, errors.New("unexpected results")
@@ -129,7 +122,7 @@ func (o *observed) Projected(counted, duplicates int) {
 func (o *observed) Retried() { o.mu.Lock(); defer o.mu.Unlock(); o.retries++ }
 
 func voteOptions() VoteOptions {
-	return VoteOptions{EnqueueTimeout: time.Second, QueryTimeout: time.Second, MaxInFlight: 2}
+	return VoteOptions{EnqueueTimeout: time.Second, MaxInFlight: 2, DedupRetention: time.Hour}
 }
 
 type fakeVoteRepository struct {
@@ -155,3 +148,22 @@ func (c fakeConsumer) Commit(ctx context.Context, p []usecase.Position) error {
 type fakeCheck struct{ ping func(context.Context) error }
 
 func (c fakeCheck) Ping(ctx context.Context) error { return c.ping(ctx) }
+
+type fakeAdmission struct {
+	lookup  func(string) []string
+	reserve func(string, []string, time.Time) (func(bool), error)
+}
+
+func (a fakeAdmission) Reserve(k string, o []string, e time.Time) (func(bool), error) {
+	if a.reserve != nil {
+		return a.reserve(k, o, e)
+	}
+	return func(bool) {}, nil
+}
+
+func (a fakeAdmission) Lookup(k string) []string {
+	if a.lookup != nil {
+		return a.lookup(k)
+	}
+	return nil
+}

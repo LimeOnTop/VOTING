@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LimeOnTop/VOTING/internal/apperr"
 	"github.com/LimeOnTop/VOTING/internal/usecase"
 )
 
@@ -88,6 +89,21 @@ func TestStrictJSONBoundary(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		if err := c.decode(httptest.NewRecorder(), req, &struct{}{}); err == nil {
 			t.Fatalf("invalid input accepted: %q", body)
+		}
+	}
+}
+
+func TestAdmissionErrorsHaveDistinctHTTPStatuses(t *testing.T) {
+	c := &Controller{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, tc := range []struct {
+		err    error
+		status int
+		retry  string
+	}{{apperr.ErrAlreadyVoted, 409, ""}, {apperr.ErrVotePending, 425, "1"}, {apperr.ErrOverloaded, 429, "1"}} {
+		w := httptest.NewRecorder()
+		c.error(w, tc.err)
+		if w.Code != tc.status || w.Header().Get("Retry-After") != tc.retry {
+			t.Fatalf("status=%d retry=%s", w.Code, w.Header().Get("Retry-After"))
 		}
 	}
 }
