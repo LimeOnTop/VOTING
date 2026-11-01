@@ -241,7 +241,10 @@ function Admin() {
     const load = () =>
       api<Result>(`/api/admin/polls/${active}/results`, token)
         .then((r) => {
-          if (live) setResult(r);
+          if (live) {
+            setResult(r);
+            setError("");
+          }
         })
         .catch((e) => {
           if (live) setError(e.message);
@@ -363,20 +366,20 @@ function Admin() {
               </div>
               <h2>{p.question}</h2>
               <div className="total">
-                <strong>{(result?.voters ?? 0).toLocaleString("ru-RU")}</strong>
+                <strong>{result ? result.voters.toLocaleString("ru-RU") : "—"}</strong>
                 <span>учтённых голосов</span>
               </div>
               <div className="bars">
                 {p.options.map((o) => {
-                  const count = result?.counts[o.id] ?? 0,
-                    pct = result?.voters ? (count / result.voters) * 100 : 0;
+                  const count = result?.counts[o.id],
+                    pct = result?.voters ? ((count ?? 0) / result.voters) * 100 : 0;
                   return (
                     <div className="bar-item" key={o.id}>
                       <div>
                         <span>{o.label}</span>
                         <strong>
-                          {pct.toFixed(1)}%{" "}
-                          <small>{count.toLocaleString("ru-RU")}</small>
+                          {result ? `${pct.toFixed(1)}%` : "—"}{" "}
+                          <small>{count?.toLocaleString("ru-RU") ?? "—"}</small>
                         </strong>
                       </div>
                       <div className="bar-track">
@@ -408,7 +411,11 @@ function Admin() {
                 Приём: {date(p.opens_at)} — {date(p.closes_at)}.<br />
                 {result?.updated_at
                   ? `Последний учтённый голос: ${date(result.updated_at)}.`
-                  : "Пока нет учтённых голосов."}{" "}
+                  : result
+                    ? "Пока нет учтённых голосов."
+                    : error
+                      ? "Результаты временно недоступны."
+                      : "Результаты загружаются."}{" "}
                 Подсчёт асинхронный.
               </p>
             </>

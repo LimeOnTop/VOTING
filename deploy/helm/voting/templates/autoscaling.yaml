@@ -1,4 +1,7 @@
 {{- if .Values.api.autoscaling.enabled }}
+{{- if gt (int .Values.api.autoscaling.minReplicas) (int .Values.api.autoscaling.maxReplicas) }}
+{{- fail "api.autoscaling.minReplicas must not exceed maxReplicas" }}
+{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -20,6 +23,9 @@ spec:
         target: {type: Utilization, averageUtilization: {{ .Values.api.autoscaling.cpu }}}
 {{- end }}
 {{- if .Values.worker.keda.enabled }}
+{{- if gt (int .Values.worker.keda.minReplicas) (int .Values.worker.keda.maxReplicas) }}
+{{- fail "worker.keda.minReplicas must not exceed maxReplicas" }}
+{{- end }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
