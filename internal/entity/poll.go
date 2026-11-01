@@ -16,16 +16,16 @@ type Poll struct {
 	Question  string    `json:"question"`
 	Type      string    `json:"type"`
 	Options   []Option  `json:"options"`
-	OpensAt   time.Time `json:"opens_at"`
-	ClosesAt  time.Time `json:"closes_at"`
-	CreatedAt time.Time `json:"created_at"`
+	OpensAt   time.Time `json:"opens_at" format:"date-time"`
+	ClosesAt  time.Time `json:"closes_at" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" format:"date-time"`
 }
 type CreatePoll struct {
 	Question string    `json:"question"`
 	Type     string    `json:"type"`
 	Options  []string  `json:"options"`
-	OpensAt  time.Time `json:"opens_at"`
-	ClosesAt time.Time `json:"closes_at"`
+	OpensAt  time.Time `json:"opens_at" format:"date-time"`
+	ClosesAt time.Time `json:"closes_at" format:"date-time"`
 }
 
 func NewPoll(in CreatePoll, id string, now time.Time) (Poll, error) {
@@ -86,6 +86,6 @@ type Result struct {
 	Poll        Poll             `json:"poll"`
 	Voters      int64            `json:"voters"`
 	Counts      map[string]int64 `json:"counts"`
-	UpdatedAt   *time.Time       `json:"updated_at"`
+	UpdatedAt   *time.Time       `json:"updated_at" format:"date-time" extensions:"x-nullable"`
 	Consistency string           `json:"consistency"`
 }

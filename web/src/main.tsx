@@ -50,10 +50,10 @@ function Voting() {
       return;
     }
     let live = true;
-    Promise.all([api<Poll>(`/api/polls/${id}`), api("/api/session")])
+    Promise.all([api<Poll>(`/api/v1/polls/${id}`), api("/api/v1/session")])
       .then(async ([poll]) => {
         const receipt = await api<{ status: string; options?: string[] }>(
-          `/api/polls/${id}/receipt`,
+          `/api/v1/polls/${id}/receipt`,
         );
         if (live) {
           setP(poll);
@@ -79,11 +79,11 @@ function Voting() {
     setError("");
     setPhase("sending");
     try {
-      await api(`/api/polls/${id}/votes`, "", { options: selected });
+      await api(`/api/v1/polls/${id}/votes`, "", { options: selected });
       setPhase("accepted");
     } catch (e) {
       if ((e as Error & {status?:number}).status === 409) {
-        const receipt = await api<{options?:string[]}>(`/api/polls/${id}/receipt`).catch(()=>undefined);
+        const receipt = await api<{options?:string[]}>(`/api/v1/polls/${id}/receipt`).catch(()=>undefined);
         setSelected(receipt?.options || []);
         setPhase("accepted");
         return;
@@ -220,7 +220,7 @@ function Admin() {
   useEffect(() => {
     if (!token) return;
     let live = true;
-    api<Poll[]>("/api/admin/polls", token)
+    api<Poll[]>("/api/v1/admin/polls", token)
       .then((p) => {
         if (live) {
           setPolls(p);
@@ -239,7 +239,7 @@ function Admin() {
     let live = true;
     setResult(undefined);
     const load = () =>
-      api<Result>(`/api/admin/polls/${active}/results`, token)
+      api<Result>(`/api/v1/admin/polls/${active}/results`, token)
         .then((r) => {
           if (live) {
             setResult(r);
@@ -260,7 +260,7 @@ function Admin() {
     e.preventDefault();
     setError("");
     try {
-      await api("/api/admin/polls", draft);
+      await api("/api/v1/admin/polls", draft);
       setToken(draft);
       setDraft("");
     } catch (e) {
@@ -463,7 +463,7 @@ function CreateModal({
     try {
       const now = Date.now();
       created(
-        await api<Poll>("/api/admin/polls", token, {
+        await api<Poll>("/api/v1/admin/polls", token, {
           question,
           type,
           options,

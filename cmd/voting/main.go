@@ -11,6 +11,20 @@ import (
 	"github.com/LimeOnTop/VOTING/internal/app"
 )
 
+// @title VOTING API
+// @version 1.0
+// @description Анонимные опросы, управление публикациями и обезличенные результаты.
+// @BasePath /api/v1
+// @accept json
+// @produce json
+// @securityDefinitions.apikey AdminBearer
+// @in header
+// @name Authorization
+// @description Bearer <ADMIN_TOKEN>.
+// @securityDefinitions.apikey BrowserCookie
+// @in header
+// @name Cookie
+// @description Подписанная cookie voting_id, полученная через GET /api/v1/session. Браузер передаёт её автоматически.
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.Load()

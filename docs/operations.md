@@ -44,7 +44,7 @@ MODE=api COOKIE_SECURE=false go run ./cmd/voting
 - `voting-worker-secrets`: metadata DB только для чтения; vote DB с записью метаданных, dedup-ключей и агрегатов; Kafka consumer credentials.
 - `voting-migration-secrets`: адреса всех БД с DDL-правами. Runtime-роли не должны иметь CREATE/ALTER/DROP.
 
-Producer получает write/describe на topic, consumer — read/describe и доступ к своей group. Административный bearer token даёт доступ ко всей админке; отдельных ролей автора и аналитика нет. При внешнем контроле доступа защищайте и `/admin`, и `/api/admin/*`.
+Producer получает write/describe на topic, consumer — read/describe и доступ к своей group. Административный bearer token даёт доступ ко всей админке; отдельных ролей автора и аналитика нет. При внешнем контроле доступа защищайте и `/admin`, и `/api/v1/admin/*`.
 
 В файле настроек окружения укажите Kafka, TLS ingress, namespace ingress controller, ресурсы и `networkPolicy.dependencyCIDRs`. Без разрешённых CIDR NetworkPolicy блокирует доступ к БД/Kafka. Разрешите адреса всех brokers, возвращаемых Kafka metadata, и всех SQL-шардов. Metrics Server нужен для HPA, KEDA/Prometheus Operator — для соответствующих опций chart.
 

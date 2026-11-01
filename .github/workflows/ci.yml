@@ -31,8 +31,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: python3 -m json.tool api/openapi.json > /dev/null
       - run: test -z "$(gofmt -l cmd internal migrations)"
+      - run: make swagger && git diff --exit-code -- api/swagger.yml
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Go security advisories

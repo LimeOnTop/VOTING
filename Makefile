@@ -1,4 +1,4 @@
-.PHONY: init up down test integration lint security web helm check
+.PHONY: init up down test integration lint security web helm swagger check
 init:
 	./scripts/init-env.sh
 up: init
@@ -18,4 +18,7 @@ web:
 helm:
 	helm lint deploy/helm/voting --strict --set image.tag=check
 	helm template voting deploy/helm/voting --set image.tag=check > /dev/null
-check: test lint security web helm
+swagger:
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g main.go -d cmd/voting,internal/controller,internal/entity --parseInternal --outputTypes yaml -o api
+	mv api/swagger.yaml api/swagger.yml
+check: test lint security web helm swagger
