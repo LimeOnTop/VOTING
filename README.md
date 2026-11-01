@@ -42,16 +42,22 @@ flowchart LR
     API -->|агрегированные итоги| Admin
 ```
 
-Публичный API не делает SQL-запись на каждый голос: `202 Accepted` возвращается после подтверждённой Kafka записи. Poll metadata кешируется на 10 секунд. Варианты и окно опубликованного опроса неизменяемы.
+Публичный API не делает SQL-запись на каждый голос: `202 Accepted` возвращается после подтверждённой Kafka записи. Poll metadata кешируется на 5 минут; TTL и лимиты задаются конфигурацией. Варианты и окно опубликованного опроса неизменяемы.
 
 Анонимный посетитель получает подписанную HttpOnly cookie. В событие попадает только отдельный для опроса `HMAC(secret, poll_id + browser_id)`. Уникальность `(poll_id, voter_key)` в PostgreSQL обеспечивает один учтённый бюллетень с браузера. Вставка бюллетеня и увеличение счётчиков — одна транзакция. Worker коммитит Kafka offset после её завершения: сбой между SQL commit и offset commit приводит к безопасному повтору. Первый успешно зафиксированный бюллетень побеждает; изменить ответ нельзя.
 
-В PostgreSQL счётчики распределены по 256 логическим бакетам, чтобы уменьшить конкуренцию за одну строку. Это **не физическое шардирование** и не решение для 100 млн RPS. Подробности: [архитектура и расчёты](docs/architecture.md), [эксплуатация Kubernetes](docs/operations.md), [контракт API](docs/api.md), [проверенные сценарии](docs/verification.md).
+В PostgreSQL счётчики распределены по 256 логическим бакетам, чтобы уменьшить конкуренцию за одну строку. Кроме бакетов поддерживаются физические БД-шарды через упорядоченный `VOTE_DATABASE_URLS`: маршрутизация по poll/voter key, пакетные транзакции и идемпотентный повтор. Список шардов нельзя менять для существующих голосов без миграции маршрутизации. Подробности: [архитектура и расчёты](docs/architecture.md), [эксплуатация Kubernetes](docs/operations.md), [контракт API](docs/api.md), [проверенные сценарии](docs/verification.md).
+
+## Слои приложения
+
+`cmd/config` читает и валидирует окружение; `internal/app` собирает зависимости через конструкторы. `entity` содержит модель, `usecase` — интерфейсы портов, `service` — сценарии, `controller` — HTTP, `repository` — SQL, `client` — Kafka, `cache` — декораторы чтения. Сервисы зависят от интерфейсов, без SQL, Kafka, HTTP и чтения env. Границы импортов проверяет AST-тест.
+
+Кеши ограничены по числу записей, разделены на сегменты и объединяют конкурентные загрузки через singleflight. TTL результатов — 1 с, учтённого receipt — 2 мин, отсутствующего опроса — 2 с. Pending receipt не кешируется. Worker читает до 500 событий за окно 25 мс и выполняет set-based SQL: дедупликация и счётчики в одной транзакции на физический шард, offsets фиксируются после успешной обработки всех шардов.
 
 ## Проверки
 
 ```sh
-# Go 1.25+, Node.js 22+, Helm 3.18+
+# Go 1.27.3+, Node.js 22+, Helm 3.18+
 go test -race ./...
 go vet ./...
 cd web && npm ci && npm run build && cd ..
@@ -59,14 +65,14 @@ helm lint deploy/helm/voting --strict --set image.tag=check
 
 # Интеграционный тест с локальным PostgreSQL из Compose
 TEST_DATABASE_URL='postgres://voting:local-dev-only@localhost:15432/voting?sslmode=disable' \
-  go test -race ./internal/store -count=1
+  go test -race ./internal/repository -count=1
 
 # Black-box: 40 конкурирующих повторов + независимый участник = ровно 2 голоса
 set -a; . ./.env; set +a
 python3 scripts/smoke.py
 ```
 
-SQL-тест работает с `TEST_DATABASE_URL`, создаёт отдельный тестовый опрос и временное ограничение; запускайте его только на тестовой БД. Без переменной интеграционный тест явно пропускается. CI запускает его на отдельном PostgreSQL.
+SQL-тест работает с `TEST_DATABASE_URL`, создаёт изолированные схемы с автоматической очисткой; запускайте его только на тестовой БД. Без переменной интеграционный тест явно пропускается. CI запускает его на отдельном PostgreSQL.
 
 Проверка накопления очереди: остановите `worker`, отправьте голос, убедитесь в `202` и отсутствии прироста результатов; запустите `worker` и дождитесь учёта. Скрипт `scripts/recovery.py` автоматизирует этот сценарий на локальном Compose.
 
@@ -88,12 +94,14 @@ Chart: `deploy/helm/voting`. Внешние PostgreSQL и Kafka обязател
 helm upgrade --install voting deploy/helm/voting \
   --namespace voting --create-namespace \
   --set image.tag=<commit-sha> \
-  --set existingSecret=voting-secrets \
+  --set apiSecret=voting-api-secrets \
+  --set workerSecret=voting-worker-secrets \
+  --set migrationSecret=voting-migration-secrets \
   -f /path/to/environment-values.yaml \
   --atomic --wait --timeout 5m
 ```
 
-Нужны ключи Secret: `DATABASE_URL`, `ADMIN_TOKEN` (≥24 байт), `SIGNING_KEY` (≥32 байт); для SASL — `KAFKA_USER`, `KAFKA_PASSWORD`. В `environment-values.yaml` задаются адреса Kafka, TLS ingress, CIDR зависимостей и ресурсы. При включённом NetworkPolicy исходящий доступ к базам по умолчанию закрыт, пока не заданы `networkPolicy.dependencyCIDRs`. Migration Job использует тот же Secret и выполняется до установки/обновления.
+Нужны ключи Secret: `DATABASE_URL`, `ADMIN_TOKEN` (≥24 байт), `SIGNING_KEY` (≥32 байт); для SASL — `KAFKA_USER`, `KAFKA_PASSWORD`. В `environment-values.yaml` задаются адреса Kafka, TLS ingress, CIDR зависимостей и ресурсы. При включённом NetworkPolicy исходящий доступ к базам по умолчанию закрыт, пока не заданы `networkPolicy.dependencyCIDRs`. API, worker и Migration Job используют раздельные Secrets и SQL/Kafka credentials с разными правами; административные секреты доступны только API. Migration Job и выполняется до установки/обновления.
 
 Chart включает отдельные API/worker Deployment, Services, startup/readiness/liveness probes, graceful shutdown, requests/limits, HPA, PDB, topology spread, непривилегированный read-only контейнер, ServiceAccount без токена и NetworkPolicy. Опционально: KEDA (lag Kafka), TLS Ingress, ServiceMonitor и PrometheusRule. Подробные зависимости и ограничения — в [operations.md](docs/operations.md).
 
@@ -105,12 +113,12 @@ docker compose --profile observability up -d prometheus
 
 Prometheus: <http://localhost:9091>. Метрики API: <http://localhost:9090/metrics>. Счётчики принятых запросов включают повторы и **не равны** числу голосов. Метрики worker различают `counted`, `duplicate`, `retry`. Логи JSON не содержат cookie, IP и варианты ответа.
 
-GitHub Actions: unit/integration tests с race detector, vet, TypeScript build, npm audit, Helm lint/template и Compose smoke. Отдельный ручной workflow `Publish image` публикует amd64/arm64 образ в GHCR с тегом commit SHA, SBOM и provenance. Автоматический production deploy не настроен: инфраструктура и секреты зависят от окружения.
+GitHub Actions: unit/integration tests с race detector, архитектурные проверки импортов, vet, golangci-lint и govulncheck, TypeScript build, npm audit, Helm lint/template и Compose smoke. Отдельный ручной workflow `Publish image` публикует amd64/arm64 образ в GHCR с тегом commit SHA, SBOM и provenance. Автоматический production deploy не настроен: инфраструктура и секреты зависят от окружения.
 
 ## Границы решения
 
 - Это базовая дедупликация браузера, а не доказательство «один человек — один голос». Очистка cookie, другой браузер и автоматизация обходят её.
-- Защита от масштабных ботов и DDoS, WAF/rate limits, глобальное распределение и физические шарды описаны как production work; локально реализованы ограничение размера запроса и числа одновременных публикаций.
+- Защита от масштабных ботов и DDoS, WAF/rate limits, глобальное распределение и управление изменением топологии шардов описаны как production work; локально реализованы ограничение размера запроса и числа одновременных публикаций.
 - Admin Bearer key — упрощение тестового. Для production нужен OIDC на admin ingress, MFA, RBAC и аудит; сам сервис пока не реализует OIDC.
 - Результаты eventual consistent. `updated_at` — время последнего учтённого голоса, не гарантия отсутствия backlog. Автоматического статуса «финальный результат» нет.
 - Kafka producer может повторно записать событие при неоднозначной сетевой ошибке; дедупликация обеспечивается в SQL, а не обещанием exactly-once транспорта.

@@ -1,25 +1,24 @@
 # Проверка реализации
 
-Проверено локально 2 ноября 2026 (Europe/Moscow), macOS arm64 / Docker Desktop. Это функциональная проверка локальной конфигурации, не сертификация production capacity.
+Локальная проверка после рефакторинга 2 ноября 2026, macOS arm64 / Docker Desktop. Проверки функциональности и конкурентности соответствуют масштабу тестового; реальный прогон 100 млн RPS не является условием сдачи.
 
-## Выполнено
+## Выполнено после рефакторинга
 
-- `go test -race ./...`: проверки валидации, границ окна `[open, close)`, неизвестных/повторных вариантов, cookie, Origin, admin auth и ошибок Kafka. Успешно.
-- `go vet ./...`: успешно.
-- PostgreSQL integration (`TEST_DATABASE_URL`, настоящий PostgreSQL 17): 40 конкурентных доставок одного бюллетеня → ровно один участник и по одному счётчику выбранных вариантов. Принудительная ошибка constraint после вставки бюллетеня → полное отсутствие частичной записи и неизменные counters. Успешно.
-- Docker multi-stage image: React/TypeScript build и Go binary, runtime distroless nonroot. Сборка и запуск успешно.
-- Compose smoke, настоящая Kafka 3.9.1: 40 конкурирующих запросов с одной cookie + независимый браузер → ровно 2 участника, сумма single-choice counters = 2. Запрос без cookie → 428. Успешно.
-- Recovery: остановлен worker, API подтвердил запись нового голоса, результат оставался нулевым; после запуска worker появился ровно 1 участник. Успешно.
-- Браузер: открытие ссылки опроса, выбор ответа, отправка, состояние ожидания, затем «Ваш голос учтён». Успешно.
-- `npm run build`: TypeScript и Vite 7.3.7 успешно. `npm audit`: 0 vulnerabilities на момент проверки.
-- Helm 3.18.6 `lint --strict`: успешно; `template` baseline и сочетание ingress + ServiceMonitor/PrometheusRule + KEDA: успешно. Обязательный image.tag передан явно.
-- k6 1.3.0 в Docker, `RATE=100 DURATION=10s`: 1001 итерация / 1001 ответа 202, ошибок HTTP 0%, vote p99=8,85 мс. С учётом GET session — 2002 HTTP-запроса. Cookie сбрасывается на каждой итерации k6: новый псевдоним браузера для каждого запроса. Измеряется ingress без ожидания подсчёта; не throughput projector и не предельная capacity.
-- `.env`, зависимости и build artifacts исключены из git; `git diff --check` успешно.
+- Go 1.27.3: `go test -race ./...` с настоящим PostgreSQL через `TEST_DATABASE_URL` — успешно. Покрыты чистая валидация, внедрение зависимостей, дедлайны/отмена, admission limit, кеши/singleflight, пакетная проекция и порядок commit offsets.
+- SQL integration: конкурентная дедупликация, replay, несколько шардов, частичный commit и безопасный повтор, rollback голосов/счётчиков при ошибке, deadlines и пагинация. Используются изолированные схемы с очисткой.
+- AST architecture tests: запрещённые импорты между слоями и скрытая инициализация во внутренних слоях; проверяются также фикстуры с нарушениями.
+- HTTP/security: admin guard/no-store, cross-origin rejection, Secure/HttpOnly/SameSite cookie, строгий и ограниченный JSON, запрет выхода static FS через symlink; подделка cookie и разделение псевдонимов между опросами.
+- `go vet ./...` и golangci-lint 2.15.0 — успешно, 0 замечаний. Профиль включает gosec, errorlint, noctx и проверки закрытия SQL/HTTP ресурсов; узкие исключения снабжены объяснениями.
+- `govulncheck` 1.9.0 — уязвимостей не найдено на момент проверки.
+- Docker multi-stage image на Go 1.27.3 и runtime distroless nonroot: сборка и запуск успешны.
+- Compose smoke с настоящими Kafka 3.9.1/PostgreSQL 17: 40 повторов одной cookie и независимый браузер дают ровно 2 участника; запрос без cookie отклоняется.
+- Recovery: worker остановлен, API подтверждает durable enqueue; после запуска worker голос учитывается ровно один раз.
+- Frontend: `npm ci`, TypeScript/Vite build и `npm audit --audit-level=high` — успешно, 0 vulnerabilities.
+- Helm 3.18.6: `lint --strict`, baseline rendering и сочетание ingress + ServiceMonitor/PrometheusRule + KEDA — успешно. API/worker/migration получают разные Secret profiles.
+- `git diff --check` — успешно. `.env`, зависимости и артефакты сборки исключены из git.
 
-На macOS linker вывел предупреждение LC_DYSYMTAB при race-сборке HTTP tests; команды завершились успешно. В CI тесты запускаются на Linux.
+## Границы проверки
 
-## Не проверено
+Результат старого локального k6 smoke не переносится на новую реализацию и не используется как доказательство capacity. Не выполнялись реальные испытания 100 млн RPS, multi-region failover, cluster integration Kubernetes/CNI/KEDA, production TLS/SASL, OIDC и восстановление после потери диска. Helm rendering не заменяет кластерную проверку.
 
-100 млн RPS, геораспределённый failover, реальное Kubernetes-развёртывание/политики CNI, KEDA controller, TLS/SASL конкретного managed Kafka, production OIDC и восстановление при потере диска. Helm rendering не заменяет cluster integration. На физическом телефоне не проверялось: safe areas, клавиатура и touch feel требуют устройства.
-
-GitHub workflows включены в репозиторий; их фактический статус следует смотреть на вкладке Actions. Локально пройденные проверки не означают автоматически зелёный удалённый CI.
+CI включает race/integration tests, vet, golangci-lint, govulncheck, frontend/audit, Helm и Compose smoke/recovery. Фактический удалённый статус доступен во вкладке Actions; локальный PASS сам по себе не означает зелёный CI.

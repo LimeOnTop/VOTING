@@ -3,14 +3,19 @@ image:
   tag: "" # Required: CI commit SHA. Never deploy mutable latest.
   pullPolicy: IfNotPresent
 imagePullSecrets: []
-existingSecret: voting-secrets
-# Secret keys: DATABASE_URL, ADMIN_TOKEN, SIGNING_KEY; optional KAFKA_USER/KAFKA_PASSWORD.
+apiSecret: voting-api-secrets
+workerSecret: voting-worker-secrets
+migrationSecret: voting-migration-secrets
+# Each profile supplies its own DATABASE_URL/VOTE_DATABASE_URLS and Kafka ACL credentials.
+# Only the API receives ADMIN_TOKEN and SIGNING_KEY.
 config:
   kafkaBrokers: kafka.kafka.svc.cluster.local:9092
   kafkaTopic: votes.v1
   kafkaGroup: voting-projector-v1
   kafkaTLS: "true"
   cookieSecure: "true"
+  # Non-secret environment overrides; see cmd/config for validated settings.
+  env: {}
 api:
   replicas: 3
   resources:

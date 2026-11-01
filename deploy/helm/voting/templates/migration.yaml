@@ -18,11 +18,17 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "voting.image" . | quote }}
           envFrom:
-            - secretRef: {name: {{ .Values.existingSecret }}}
+            - secretRef: {name: {{ .Values.migrationSecret }}}
           env: [{name: MODE, value: migrate}]
           resources:
             requests: {cpu: 100m, memory: 64Mi}
