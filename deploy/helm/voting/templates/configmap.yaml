@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "voting.name" . }}
+  labels:
+    {{- include "voting.labels" . | nindent 4 }}
+data:
+  KAFKA_BROKERS: {{ .Values.config.kafkaBrokers | quote }}
+  KAFKA_TOPIC: {{ .Values.config.kafkaTopic | quote }}
+  KAFKA_GROUP: {{ .Values.config.kafkaGroup | quote }}
+  KAFKA_TLS: {{ .Values.config.kafkaTLS | quote }}
+  COOKIE_SECURE: {{ .Values.config.cookieSecure | quote }}

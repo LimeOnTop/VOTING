@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Exercise queued-vote recovery on the LOCAL Compose project. Restarts worker in finally."""
+import http.cookiejar,json,os,subprocess,time,urllib.request
+BASE='http://localhost:8080'; TOKEN=os.environ['ADMIN_TOKEN']
+def req(path,body=None,client=None,admin=False):
+    headers={'Content-Type':'application/json'}
+    if admin:headers['Authorization']='Bearer '+TOKEN
+    r=urllib.request.Request(BASE+path,data=json.dumps(body).encode() if body else None,headers=headers)
+    with (client.open(r,timeout=10) if client else urllib.request.urlopen(r,timeout=10)) as response:return json.load(response)
+fmt=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
+now=time.time();p=req('/api/admin/polls',{'question':'Проверка восстановления очереди','type':'single','options':['Да','Нет'],'opens_at':fmt(now-1),'closes_at':fmt(now+600)},admin=True)
+client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()));req('/api/session',client=client)
+subprocess.run(['docker','compose','stop','worker'],check=True)
+try:
+    response=req('/api/polls/'+p['id']+'/votes',{'options':['1']},client)
+    assert response['status']=='accepted',response
+    time.sleep(1)
+    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    assert result['voters']==0,result
+finally:subprocess.run(['docker','compose','start','worker'],check=True)
+for _ in range(60):
+    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    if result['voters']==1:break
+    time.sleep(.5)
+assert result['voters']==1,result
+print('PASS: durable acceptance while worker stopped; exactly one vote after restart')

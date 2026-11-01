@@ -1,0 +1,90 @@
+{{- range $component := list "api" "worker" }}
+{{- $cfg := index $.Values $component }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "voting.name" $ }}-{{ $component }}
+  labels:
+    {{- include "voting.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  {{- if or (and (eq $component "api") (not $.Values.api.autoscaling.enabled)) (and (eq $component "worker") (not $.Values.worker.keda.enabled)) }}
+  replicas: {{ $cfg.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voting
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: {{ $component }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "voting.name" $ }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $.Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/component: {{ $component }}
+      {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "voting.image" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          envFrom:
+            - configMapRef: {name: {{ include "voting.name" $ }}}
+            - secretRef: {name: {{ $.Values.existingSecret }}}
+          env:
+            - {name: MODE, value: {{ $component | quote }}}
+          ports:
+            {{- if eq $component "api" }}
+            - {name: http, containerPort: 8080}
+            {{- end }}
+            - {name: metrics, containerPort: 9090}
+          startupProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /readyz, port: {{ if eq $component "api" }}http{{ else }}metrics{{ end }}}
+            periodSeconds: 3
+            failureThreshold: 2
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+{{- end }}

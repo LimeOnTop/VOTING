@@ -1,0 +1,60 @@
+image:
+  repository: ghcr.io/limeontop/voting
+  tag: "" # Required: CI commit SHA. Never deploy mutable latest.
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+existingSecret: voting-secrets
+# Secret keys: DATABASE_URL, ADMIN_TOKEN, SIGNING_KEY; optional KAFKA_USER/KAFKA_PASSWORD.
+config:
+  kafkaBrokers: kafka.kafka.svc.cluster.local:9092
+  kafkaTopic: votes.v1
+  kafkaGroup: voting-projector-v1
+  kafkaTLS: "true"
+  cookieSecure: "true"
+api:
+  replicas: 3
+  resources:
+    requests: {cpu: 250m, memory: 128Mi}
+    limits: {cpu: "2", memory: 512Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    cpu: 65
+worker:
+  replicas: 3
+  resources:
+    requests: {cpu: 250m, memory: 128Mi}
+    limits: {cpu: "2", memory: 512Mi}
+  keda:
+    enabled: false # Requires KEDA CRDs and network access to Kafka.
+    minReplicas: 3
+    maxReplicas: 12 # Must not exceed topic partition count.
+    lagThreshold: "1000"
+    authenticationRef: "" # TriggerAuthentication for TLS/SASL; required when enabled.
+ingress:
+  enabled: false
+  className: nginx
+  host: voting.example.com
+  tlsSecret: voting-tls
+  annotations: {}
+serviceMonitor:
+  enabled: false
+  labels: {}
+networkPolicy:
+  enabled: true
+  ingressNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+  # Narrow these destination CIDRs to database/Kafka endpoints in your environment.
+  dependencyCIDRs: []
+  databasePort: 5432
+  kafkaPort: 9092
+pdb:
+  enabled: true
+  minAvailable: 2
+topologySpread:
+  enabled: true
+migration:
+  enabled: true
+nodeSelector: {}
+tolerations: []
