@@ -2,7 +2,7 @@
 
 ## Слои
 
-`entity` — модель и валидация; `usecase` — интерфейсы; `service` — сценарии. Адаптеры: `controller` — HTTP, `repository` — PostgreSQL, `client` — Kafka, `cache` — память и кеши, `auth` — идентичность, `observability` — метрики. `internal/app` собирает зависимости, `cmd/config` читает и проверяет окружение. Направление импортов контролируется архитектурным тестом.
+`entity` — модель и валидация; `usecase` — интерфейсы; `service` — сценарии. Адаптеры: `controller` — HTTP, `repository` — PostgreSQL, `client` — Kafka, `cache` — память и кеши, `auth` — идентичность, `observability` — метрики. `internal/app` собирает зависимости, `cmd/config` читает и проверяет окружение.
 
 API и worker запускаются из одного приложения в разных режимах и масштабируются независимо.
 

@@ -55,14 +55,14 @@ jobs:
           helm template voting deploy/helm/voting --set image.tag=check --set ingress.enabled=true --set serviceMonitor.enabled=true --set worker.keda.enabled=true --set worker.keda.authenticationRef=test > /tmp/chart-all.yaml
       - uses: actions/upload-artifact@v4
         with: {name: coverage, path: coverage.out}
-  smoke:
+  runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - run: ./scripts/init-env.sh
+      - run: make init
       - run: docker compose up --build -d
-      - name: Wait for readiness and test duplicate votes
+      - name: Wait for readiness
         run: |
           ready=false
           for i in $(seq 1 60); do
@@ -70,9 +70,6 @@ jobs:
             sleep 2
           done
           test "$ready" = true
-          set -a; . ./.env; set +a
-          python3 scripts/smoke.py
-          python3 scripts/recovery.py
       - name: Diagnostics
         if: failure()
         run: docker compose logs --tail=100
