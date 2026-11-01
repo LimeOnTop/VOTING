@@ -10,3 +10,6 @@ data:
   KAFKA_GROUP: {{ .Values.config.kafkaGroup | quote }}
   KAFKA_TLS: {{ .Values.config.kafkaTLS | quote }}
   COOKIE_SECURE: {{ .Values.config.cookieSecure | quote }}
+  {{- range $key, $value := .Values.config.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

@@ -1,79 +1,68 @@
 # Эксплуатация
 
-## Provisioning до Helm
+## Подготовка окружения
 
-1. Отдельный namespace и external Secret `voting-secrets`: `DATABASE_URL` (TLS к БД), `ADMIN_TOKEN`, `SIGNING_KEY`, опционально Kafka credentials. Secret создаётся до migration hook. В production используйте External Secrets/Vault/облачный Secret Manager, а не секреты в values.
-2. PostgreSQL HA с backups/PITR; роли с минимальными правами. Migration identity требует DDL; для строгого разделения ролей запускайте migration отдельным внешним pipeline (`migration.enabled=false`) и используйте DML-only credentials у runtime.
-3. Kafka topic `votes.v1`, partitions по измерениям, RF=3+, min.insync.replicas=2+, unclean election disabled, TLS/SASL ACL. Runtime producer — write/describe, worker — read и consumer group; создание topic ему не разрешается.
-4. Ingress controller, TLS certificate Secret (например cert-manager), Metrics Server для HPA, CNI с NetworkPolicy. Для ServiceMonitor/PrometheusRule нужны CRD Prometheus Operator. Для KEDA — CRD/controller и TriggerAuthentication с TLS/SASL параметрами.
-5. Настройте админский OIDC gateway/MFA и private ingress на `/admin` **и** `/api/admin/*`. Одного ограничения UI недостаточно. Пример chart использует общий ingress; это не готовый корпоративный auth gateway.
-6. Соберите и опубликуйте образ через workflow `Publish image` либо свой registry. `image.tag` обязателен. По умолчанию образ в GHCR не обещается существующим до запуска workflow.
+Helm устанавливает API и worker одного сервиса, probes, лимиты ресурсов, autoscaling и политики доступности/сети. PostgreSQL, Kafka, ingress controller и их HA/backup lifecycle предоставляются окружением. Образ необходимо заранее собрать и опубликовать; `image.tag` обязателен.
 
-Пример environment values (замените адреса/CIDR своими):
+Создайте отдельные external Secrets для профилей `apiSecret`, `workerSecret`, `migrationSecret`; храните значения в External Secrets/Vault/облачном Secret Manager, а не в values или Git:
 
-```yaml
-config:
-  kafkaBrokers: broker-1.internal:9093,broker-2.internal:9093,broker-3.internal:9093
-  kafkaTLS: "true"
-  cookieSecure: "true"
-ingress:
-  enabled: true
-  className: nginx
-  host: vote.example.org
-  tlsSecret: voting-tls
-networkPolicy:
-  dependencyCIDRs: ["10.20.0.0/16"]
-  kafkaPort: 9093
-  databasePort: 5432
-serviceMonitor:
-  enabled: true
-  labels:
-    release: kube-prometheus-stack
-worker:
-  keda:
-    enabled: true
-    maxReplicas: 12
-    authenticationRef: voting-kafka-auth
-```
+- API: `DATABASE_URL` с правами чтения/создания опросов, `VOTE_DATABASE_URLS` с правами чтения проекции, `ADMIN_TOKEN`, `SIGNING_KEY`, producer Kafka credentials.
+- Worker: `DATABASE_URL` только для чтения метаданных, `VOTE_DATABASE_URLS` с правами вставки метаданных голосовых шардов/голосов и обновления агрегатов; consumer Kafka credentials. Admin token и signing key worker не нужны.
+- Migration: адреса всех БД с отдельными DDL credentials. Ни API, ни worker не должны иметь CREATE/ALTER/DROP. `MODE=migrate` применяет схему к primary и всем уникальным vote DSN; runtime режимы миграции не запускают.
 
-NetworkPolicy разрешает DNS к kube-system; при NodeLocal DNS необходимо добавить его адрес в политику. CIDR должны покрывать реальные адреса всех brokers из Kafka metadata и БД, а не только bootstrap endpoint. Некоторые CNI иначе обрабатывают Service NAT: проверьте политику в целевом кластере. Migration hook имеет отдельную pod label set и не выбирается app policy — к нему должны применяться namespace baseline policies. Это явно учитывается при настройке окружения.
+Одинаковые физические БД могут иметь разные DSN/пользователей в профилях. Важно сохранить одинаковый порядок и соответствие данных в `VOTE_DATABASE_URLS` всех API/worker. Это JSON-массив, например `["postgres://.../votes_a?sslmode=verify-full","postgres://.../votes_b?sslmode=verify-full"]`; credentials не выводите в логи. По умолчанию массив отсутствует и голосование использует `DATABASE_URL`. Изменение порядка/числа шардов без миграции нарушает дедупликацию и поиск receipts.
 
-## Развёртывание и откат
+Предоставьте PostgreSQL TLS, HA и проверяемые backups/PITR. Отзовите ненужные права `PUBLIC`; выдайте конкретным runtime-ролям только необходимые table/schema privileges. Начальная миграция создаёт таблицы, но не является системой управления корпоративными SQL-ролями. Для миграции из внешнего pipeline отключите Helm hook (`migration.enabled=false`).
 
-`helm upgrade --install ... --atomic --wait`. API запускается неготовым, каждые 3 сек проверяет БД/Kafka, graceful shutdown прекращает readiness и завершает HTTP в пределах 20 сек. Worker прекращает fetch по SIGTERM; незакоммиченный offset будет перечитан. `terminationGracePeriodSeconds=30`.
+Kafka topic `votes.v1` создаётся заранее: partitions по capacity-модели, RF=3+, min.insync.replicas=2+, unclean election disabled, TLS/SASL ACL. Producer имеет write/describe, consumer — read/describe и доступ только к своей group `voting-projector-v1`. Runtime не создаёт topics. SASL PLAIN допускается только с TLS. Retention покрывает максимальный сбой, replay и drain; committed offsets не защищают сообщения от удаления retention-политикой.
 
-Migration — idempotent initial schema под advisory lock; это не полноценный versioned migration engine. Следующие версии схемы должны быть пронумерованными expand/contract migrations. Helm rollback не откатывает схему БД. Внешние Kafka/PostgreSQL lifecycle отделён от приложения.
+Установите Metrics Server для HPA; для ServiceMonitor/PrometheusRule — CRD Prometheus Operator, для KEDA — controller/CRD и TriggerAuthentication с TLS/SASL. Ограничьте админские `/admin` и `/api/admin/*` private ingress/OIDC gateway с MFA. Встроенный bearer token даёт единственную административную роль; отдельных ролей автора опросов и аналитика в приложении нет. Анонимному посетителю доступны только публичные сценарии и собственный receipt. Gateway должен защищать API, а не только UI.
 
-API HPA — CPU baseline, не доказательство достаточного capacity. Worker KEDA — lag, replicas ≤ partitions. Масштабирование ограничивается connection budget: каждый процесс имеет pool до 20 SQL connections; увеличивая replicas, учитывайте лимиты БД/PgBouncer. В chart PDB `minAvailable=2`, min replicas 3; если уменьшаете replicas в dev, меняйте/выключайте PDB. PDB защищает только от добровольных disruptions. Zone spread `ScheduleAnyway` — мягкое распределение, не hard HA guarantee.
+Ingress должен завершать TLS, cookie в production — Secure. NetworkPolicy должна разрешать реальные адреса всех Kafka brokers из metadata, всех SQL-шардов и DNS, включая NodeLocal DNS при его использовании. Учитывайте NAT конкретного CNI. Для migration hook также необходима namespace baseline policy. Служебный порт метрик не публикуйте наружу.
 
-До эфира заранее увеличьте minReplicas/число нод и проверьте соединения, DNS, topic ownership, TLS и downstream. CPU HPA и cluster autoscaler не заменяют предварительный прогрев.
+## Настройки и ресурсный бюджет
 
-## Метрики и алерты
+Все значения читаются и проверяются в `cmd/config`; невалидная конфигурация останавливает старт. Основные defaults:
 
-Реализованы `voting_http_requests_total{route,status}`, `voting_accepted_total`, `voting_enqueue_duration_seconds`, `voting_worker_events_total{outcome}`, `voting_worker_last_processed_timestamp_seconds` и Go/process metrics. Лейблы маршрутов не включают poll_id/voter_key. Worker `retry` показывает SQL retries. Chart содержит примеры alerts на 503 при публикации и SQL retries.
+- SQL: `DB_MAX_CONNECTIONS=20`, `DB_MIN_CONNECTIONS=2`, lifetime 30 мин, idle 5 мин, statement timeout 5 с, lock timeout 1 с; `DB_READ_CONCURRENCY=8`, `COUNTER_SHARDS=256`.
+- Кеши: `CACHE_CAPACITY=10000`, `CACHE_SHARDS=64`, `CACHE_MAX_LOADS=32`, `CACHE_LOAD_TIMEOUT=2s`; poll TTL 5 мин, negative TTL 2 с, results TTL 1 с, positive receipt TTL 2 мин. Capacity и load limit применяются отдельно к metadata cache и API read cache.
+- Kafka: producer batch 1000/5 мс, consumer batch 500/25 мс; fetch max 10 000 000 байт. `ENQUEUE_TIMEOUT=6s`, `PROJECTION_TIMEOUT=10s`, retry backoff 250 мс. Consumer commits синхронны после всего успешно применённого пакета.
+- HTTP: `VOTE_MAX_IN_FLIGHT=1024`, body limit 8192 байт, header limit 16384 байта; request timeout 10 с, write timeout 12 с; `QUERY_TIMEOUT=2s`. Админский список: 100 записей по умолчанию, максимум 1000, пагинация limit/offset.
+- Lifecycle: startup timeout 15 с, health interval 3 с, health timeout 2 с, shutdown timeout 20 с. `WARM_POLL_IDS` — comma-separated список активных опросов для загрузки до запуска обслуживания.
 
-Дополнительно в production подключаются Kafka exporter / broker metrics (lag, oldest unprocessed age, ISR, disk, produce latency), PostgreSQL exporter (connections, WAL, replication lag, lock wait), ingress и node metrics. Эти exporters не входят в приложение. Нужны алерты на unavailable Deployment, отсутствие scrape targets и poison event crashloop. Одного `last_processed` недостаточно для определения backlog при отсутствии трафика. Метрики служебного порта не открывайте публично.
+Connection budget для конкретной БД — сумма `DB_MAX_CONNECTIONS` всех процессов, открывающих к ней pool, плюс миграции и операционный запас. У процесса до одного пула на каждый уникальный DSN; совпадающие primary/vote DSN переиспользуются. Добавление физических шардов увеличивает число пулов и минимальных соединений, добавление replicas увеличивает их снова. Учитывайте лимиты PostgreSQL/PgBouncer до увеличения HPA/KEDA.
 
-## Runbook
+Логические counter buckets не добавляют БД. Число/порядок физических шардов и `COUNTER_SHARDS` фиксируются для записанных данных; до изменения нужен согласованный migration/routing plan. Начальная миграция идемпотентна и защищена advisory lock, но не заменяет полноценные последующие versioned expand/contract migrations. Helm rollback не откатывает схему БД.
 
-- **503 при vote:** смотреть readiness, broker reachability/ISR и SQL metadata. Не возвращать 202 до durable ack. Повторы с той же cookie безопасны.
-- **Результаты отстают:** сравнить accepted/count rate и consumer lag. Проверить SQL retries/locks, replicas/partitions и disk. После закрытия дождаться drain; `closes_at` не означает финальный итог.
-- **Poison event:** worker выходит с ошибкой, offset не продвигается. Сохранить raw event в защищённое расследование; исправить причину и replay. Ручной skip допускается только по процедуре с аудитом и учётом потерянного голоса.
-- **Истекает retention:** расширить capacity/retention до удаления backlog, следить за диском. Retention не управляет Kafka по committed offsets.
-- **Восстановление БД:** вернуть совместимую schema/data и replay журнала. При частичном сбросе таблиц нельзя сохранять старые counters или offsets без согласованного плана. Изолированный rebuild projection требует очистки всех связанных state tables и отдельной consumer group.
-- **Секрет скомпрометирован:** admin token заменить и rollout. Signing key требует keyring rollout либо закрытия текущих polls: простая замена сбрасывает дедупликацию.
+## Развёртывание
 
-## Локальная разработка без сборки образа
+Выполните `helm upgrade --install ... --atomic --wait` с образом, профилями Secrets и параметрами окружения. Startup проверяет соединения со всеми настроенными БД и прогревает указанные опросы. Периодическая readiness API зависит от metadata DB и Kafka; временная остановка проекции может накапливать durable backlog без остановки приёма. Readiness не доказывает доступность каждого SQL-шарда: это контролируется exporter/алертами и запросами чтения/проекции. Недоступный обязательный warm poll блокирует старт.
+
+По SIGTERM API снимает readiness и завершает HTTP; worker прекращает работу, неподтверждённые offsets будут перечитаны. Grace period Kubernetes должен превышать shutdown budget; chart использует 30 с. API масштабируется CPU HPA, worker — Kafka lag через KEDA; число активных consumers ограничено partitions. PDB и распределение по зонам защищают только в рамках настроек кластера: `ScheduleAnyway` — мягкое ограничение, PDB — только добровольные disruptions. При уменьшении dev replicas согласуйте PDB.
+
+До эфира заранее увеличьте minReplicas/число нод, прогрейте `WARM_POLL_IDS`, проверьте TLS, DNS, топологию шардов, ISR, лимиты соединений и запас retention. Autoscaler после начала минутного пика не заменяет предварительно выделенный capacity. Один Helm release не является подтверждением 100 млн RPS; расчёты и границы описаны в [архитектуре](architecture.md).
+
+## Наблюдаемость и runbook
+
+Приложение публикует `voting_http_requests_total`, `voting_enqueue_total`, `voting_enqueue_duration_seconds`, `voting_cache_access_total` (hit/miss/negative_hit/overloaded), `voting_worker_events_total` и `voting_worker_last_processed_timestamp_seconds`, а также Go/process metrics. Labels не содержат poll ID, voter key или cookie. При частичном SQL commit/retry метрики новых вставок могут недооценить прежний успешный commit; итоговые SQL-агрегаты авторитетны. Подключите Kafka exporter для lag/oldest age/ISR/disk, PostgreSQL exporter для connections/WAL/locks/replication lag и ingress/node metrics. Эти exporters не поставляются внутри приложения.
+
+- **503/overload при vote:** проверить readiness, in-flight/load limits, cold cache, Kafka produce latency и ISR. Не заменять durable ack ранним 202; повтор с той же cookie безопасен. Metadata cache уменьшает SQL только после загрузки.
+- **SQL-нагрузка от receipts:** pending не кешируется, положительный кеш локален и ограничен. Ограничить polling, добавить backoff/jitter; для целевого глобального пика развернуть отдельную распределённую read model статусов.
+- **Результаты отстают:** проверить lag, rate проекции, retries/locks/WAL, partitions и connection budget. Закрытие опроса не означает финальность результатов; дождаться drain. Результаты нескольких БД — eventual sum согласованных локальных снимков.
+- **Ошибка одной БД:** worker повторяет весь пакет; уже записанные шарды не пересчитывают дубликаты. Offsets не подтверждаются до общего успеха. Восстановить шард, не менять routing list ради обхода сбоя.
+- **Poison event:** worker завершается без commit. Исследовать событие в защищённом контуре, исправить причину и replay. Ручной skip требует отдельной аудируемой процедуры и учёта потерянного голоса; автоматического DLQ/skip нет.
+- **Backlog близок к retention:** увеличить доступный storage/retention и drain capacity до удаления сообщений. Оценивать и объём, и возраст; `last_processed` сам по себе не определяет backlog.
+- **Восстановление БД:** восстановить согласованные голоса, counters и progress, затем replay. Для полного rebuild нужны все связанные state tables и согласованный offset/group plan; нельзя обнулить только часть проекции.
+- **Ротация секрета:** admin token заменить с rollout. Signing key нельзя просто менять во время активного опроса: это изменит идентичности/дедупликацию; нужен keyring migration или завершение активных опросов. Runtime-роли и Kafka ACL ротируются отдельно.
+
+## Локальная разработка
+
+Для стандартного стенда используйте команды [README](../README.md). Для запуска Go вне контейнера после поднятия PostgreSQL/Kafka укажите `DATABASE_URL` на `localhost:15432`, `KAFKA_BROKERS=localhost:19092`, загрузите локальные секреты и выполните последовательно миграцию, затем в отдельных терминалах worker/API:
 
 ```sh
-./scripts/init-env.sh
-docker compose up -d postgres kafka topics
-export DATABASE_URL='postgres://voting:local-dev-only@localhost:15432/voting?sslmode=disable'
-set -a; . ./.env; set +a
 MODE=migrate go run ./cmd/voting
-MODE=worker METRICS_ADDR=:9092 go run ./cmd/voting  # отдельный терминал
-MODE=api go run ./cmd/voting                     # отдельный терминал
-cd web && npm ci && npm run dev                 # frontend dev :5173, proxy /api
+MODE=worker METRICS_ADDR=:9092 go run ./cmd/voting
+MODE=api COOKIE_SECURE=false go run ./cmd/voting
 ```
 
-Для одного backend URL сначала `cd web && npm ci && npm run build`, затем API обслужит `web/dist` на :8080. `KAFKA_BROKERS` по умолчанию localhost:19092. На реальном телефоне нужны доступный LAN адрес и соответствующая dev bind-настройка Docker; localhost-порты Compose намеренно не публикуются в LAN.
+Сначала соберите frontend (`cd web && npm ci && npm run build`), чтобы API обслуживал `web/dist`, либо запустите frontend dev server с proxy `/api`. `COOKIE_SECURE=false` допустим только для локального HTTP. Порты Compose публикуются на localhost; для телефона понадобится отдельно настроенный доступный dev адрес. Для тестового проверяются функциональность, конкурентность, replay/rollback и ограниченность ресурсов; реальные дорогостоящие испытания на 100 млн RPS не требуются.

@@ -3,9 +3,11 @@
   "type": "object",
   "required": [
     "image",
-    "existingSecret",
     "api",
-    "worker"
+    "worker",
+    "apiSecret",
+    "workerSecret",
+    "migrationSecret"
   ],
   "properties": {
     "image": {
@@ -24,10 +26,6 @@
           "minLength": 1
         }
       }
-    },
-    "existingSecret": {
-      "type": "string",
-      "minLength": 1
     },
     "api": {
       "type": "object",
@@ -73,6 +71,50 @@
             "maxReplicas": {
               "type": "integer",
               "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "apiSecret": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workerSecret": {
+      "type": "string",
+      "minLength": 1
+    },
+    "migrationSecret": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "DATABASE_URL",
+                "VOTE_DATABASE_URLS",
+                "ADMIN_TOKEN",
+                "SIGNING_KEY",
+                "KAFKA_USER",
+                "KAFKA_PASSWORD",
+                "KAFKA_BROKERS",
+                "KAFKA_TOPIC",
+                "KAFKA_GROUP",
+                "KAFKA_TLS",
+                "COOKIE_SECURE",
+                "MODE",
+                "ADDR",
+                "METRICS_ADDR",
+                "WEB_DIR"
+              ]
             }
           }
         }

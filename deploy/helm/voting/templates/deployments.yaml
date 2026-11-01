@@ -66,7 +66,7 @@ spec:
             capabilities: {drop: [ALL]}
           envFrom:
             - configMapRef: {name: {{ include "voting.name" $ }}}
-            - secretRef: {name: {{ $.Values.existingSecret }}}
+            - secretRef: {name: {{ index $.Values (printf "%sSecret" $component) }}}
           env:
             - {name: MODE, value: {{ $component | quote }}}
           ports:
