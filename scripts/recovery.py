@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise queued-vote recovery on the LOCAL Compose project. Restarts worker in finally."""
-import http.cookiejar,json,os,subprocess,time,urllib.request
+import http.cookiejar,json,os,subprocess,time,urllib.request,urllib.error
 BASE='http://localhost:8080'; TOKEN=os.environ['ADMIN_TOKEN']
 def req(path,body=None,client=None,admin=False):
     headers={'Content-Type':'application/json'}
@@ -24,3 +24,28 @@ for _ in range(60):
     time.sleep(.5)
 assert result['voters']==1,result
 print('PASS: durable acceptance while worker stopped; exactly one vote after restart')
+# Lose API memory, then retry the same identity with a different choice.
+# The second 202 is allowed; the worker must preserve the first aggregate.
+subprocess.run(['docker','compose','restart','api'],check=True)
+for _ in range(60):
+    try:
+        req('/readyz')
+        break
+    except (OSError,urllib.error.HTTPError):time.sleep(.5)
+else:raise AssertionError('API did not become ready after restart')
+receipt=req('/api/polls/'+p['id']+'/receipt',client=client)
+assert receipt['status']=='not_submitted_or_forgotten',receipt
+response=req('/api/polls/'+p['id']+'/votes',{'options':['2']},client)
+assert response['status']=='accepted',response
+# Follow-up independent identity ensures the projection continues processing.
+other=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+req('/api/session',client=other)
+req('/api/polls/'+p['id']+'/votes',{'options':['2']},other)
+for _ in range(60):
+    result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+    if result['voters']==2:break
+    time.sleep(.5)
+time.sleep(2)
+result=req('/api/admin/polls/'+p['id']+'/results',admin=True)
+assert result['voters']==2 and result['counts']=={'1':1,'2':1},result
+print('PASS: API memory loss permits replay; worker preserves first answer and aggregate')

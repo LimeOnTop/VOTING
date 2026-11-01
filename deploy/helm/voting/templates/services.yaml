@@ -12,6 +12,10 @@ metadata:
   labels:
     {{- include "voting.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $component }}
+  {{- if and (eq $component "api") $.Values.ingress.sticky.enabled (eq $.Values.ingress.sticky.provider "haproxy") }}
+  annotations:
+    haproxy.org/cookie-persistence: {{ $.Values.ingress.sticky.cookieName | quote }}
+  {{- end }}
 spec:
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}

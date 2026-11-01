@@ -6,8 +6,8 @@ Helm устанавливает API и worker одного сервиса, probe
 
 Создайте отдельные external Secrets для профилей `apiSecret`, `workerSecret`, `migrationSecret`; храните значения в External Secrets/Vault/облачном Secret Manager, а не в values или Git:
 
-- API: `DATABASE_URL` с правами чтения/создания опросов, `VOTE_DATABASE_URLS` с правами чтения проекции, `ADMIN_TOKEN`, `SIGNING_KEY`, producer Kafka credentials.
-- Worker: `DATABASE_URL` только для чтения метаданных, `VOTE_DATABASE_URLS` с правами вставки метаданных голосовых шардов/голосов и обновления агрегатов; consumer Kafka credentials. Admin token и signing key worker не нужны.
+- API: `DATABASE_URL` с правами чтения/создания опросов, `VOTE_DATABASE_URLS` с правами чтения агрегатов, `ADMIN_TOKEN`, `SIGNING_KEY`, producer Kafka credentials.
+- Worker: `DATABASE_URL` только для чтения метаданных, `VOTE_DATABASE_URLS` с правами вставки метаданных голосовых шардов/dedup-ключей и обновления агрегатов; consumer Kafka credentials. Admin token и signing key worker не нужны.
 - Migration: адреса всех БД с отдельными DDL credentials. Ни API, ни worker не должны иметь CREATE/ALTER/DROP. `MODE=migrate` применяет схему к primary и всем уникальным vote DSN; runtime режимы миграции не запускают.
 
 Одинаковые физические БД могут иметь разные DSN/пользователей в профилях. Важно сохранить одинаковый порядок и соответствие данных в `VOTE_DATABASE_URLS` всех API/worker. Это JSON-массив, например `["postgres://.../votes_a?sslmode=verify-full","postgres://.../votes_b?sslmode=verify-full"]`; credentials не выводите в логи. По умолчанию массив отсутствует и голосование использует `DATABASE_URL`. Изменение порядка/числа шардов без миграции нарушает дедупликацию и поиск receipts.
@@ -25,7 +25,7 @@ Ingress должен завершать TLS, cookie в production — Secure. Ne
 Все значения читаются и проверяются в `cmd/config`; невалидная конфигурация останавливает старт. Основные defaults:
 
 - SQL: `DB_MAX_CONNECTIONS=20`, `DB_MIN_CONNECTIONS=2`, lifetime 30 мин, idle 5 мин, statement timeout 5 с, lock timeout 1 с; `DB_READ_CONCURRENCY=8`, `COUNTER_SHARDS=256`.
-- Кеши: `CACHE_CAPACITY=10000`, `CACHE_SHARDS=64`, `CACHE_MAX_LOADS=32`, `CACHE_LOAD_TIMEOUT=2s`; poll TTL 5 мин, negative TTL 2 с, results TTL 1 с, positive receipt TTL 2 мин. Capacity и load limit применяются отдельно к metadata cache и API read cache.
+- Кеши: `CACHE_CAPACITY=10000`, `CACHE_SHARDS=64`, `CACHE_MAX_LOADS=32`, `CACHE_LOAD_TIMEOUT=2s`; poll TTL 5 мин, negative TTL 2 с, results TTL 1 с, отдельная admission map: `DEDUP_CAPACITY=1000000`, `DEDUP_RETENTION=1h` после закрытия опроса. Capacity и load limit применяются отдельно к metadata cache и API read cache.
 - Kafka: producer batch 1000/5 мс, consumer batch 500/25 мс; fetch max 10 000 000 байт. `ENQUEUE_TIMEOUT=6s`, `PROJECTION_TIMEOUT=10s`, retry backoff 250 мс. Consumer commits синхронны после всего успешно применённого пакета.
 - HTTP: `VOTE_MAX_IN_FLIGHT=1024`, body limit 8192 байт, header limit 16384 байта; request timeout 10 с, write timeout 12 с; `QUERY_TIMEOUT=2s`. Админский список: 100 записей по умолчанию, максимум 1000, пагинация limit/offset.
 - Lifecycle: startup timeout 15 с, health interval 3 с, health timeout 2 с, shutdown timeout 20 с. `WARM_POLL_IDS` — comma-separated список активных опросов для загрузки до запуска обслуживания.
@@ -40,19 +40,19 @@ Connection budget для конкретной БД — сумма `DB_MAX_CONNEC
 
 По SIGTERM API снимает readiness и завершает HTTP; worker прекращает работу, неподтверждённые offsets будут перечитаны. Grace period Kubernetes должен превышать shutdown budget; chart использует 30 с. API масштабируется CPU HPA, worker — Kafka lag через KEDA; число активных consumers ограничено partitions. PDB и распределение по зонам защищают только в рамках настроек кластера: `ScheduleAnyway` — мягкое ограничение, PDB — только добровольные disruptions. При уменьшении dev replicas согласуйте PDB.
 
-До эфира заранее увеличьте minReplicas/число нод, прогрейте `WARM_POLL_IDS`, проверьте TLS, DNS, топологию шардов, ISR, лимиты соединений и запас retention. Autoscaler после начала минутного пика не заменяет предварительно выделенный capacity. Один Helm release не является подтверждением 100 млн RPS; расчёты и границы описаны в [архитектуре](architecture.md).
+До эфира заранее увеличьте minReplicas/число нод, прогрейте `WARM_POLL_IDS`, проверьте TLS, DNS, топологию шардов, ISR, лимиты соединений и запас retention. Autoscaler после начала минутного пика не заменяет предварительно выделенный capacity. Один Helm release не является подтверждением 1,8 млн RPS; расчёты и границы описаны в [архитектуре](architecture.md).
 
 ## Наблюдаемость и runbook
 
 Приложение публикует `voting_http_requests_total`, `voting_enqueue_total`, `voting_enqueue_duration_seconds`, `voting_cache_access_total` (hit/miss/negative_hit/overloaded), `voting_worker_events_total` и `voting_worker_last_processed_timestamp_seconds`, а также Go/process metrics. Labels не содержат poll ID, voter key или cookie. При частичном SQL commit/retry метрики новых вставок могут недооценить прежний успешный commit; итоговые SQL-агрегаты авторитетны. Подключите Kafka exporter для lag/oldest age/ISR/disk, PostgreSQL exporter для connections/WAL/locks/replication lag и ingress/node metrics. Эти exporters не поставляются внутри приложения.
 
 - **503/overload при vote:** проверить readiness, in-flight/load limits, cold cache, Kafka produce latency и ISR. Не заменять durable ack ранним 202; повтор с той же cookie безопасен. Metadata cache уменьшает SQL только после загрузки.
-- **SQL-нагрузка от receipts:** pending не кешируется, положительный кеш локален и ограничен. Ограничить polling, добавить backoff/jitter; для целевого глобального пика развернуть отдельную распределённую read model статусов.
+- **Потеря admission map/affinity:** повтор может попасть в Kafka, worker не увеличит итог дважды. Receipt подтверждает приём, не подсчёт; public SQL polling отсутствует. Заполнение map даёт 429, активные ключи не вытесняются.
 - **Результаты отстают:** проверить lag, rate проекции, retries/locks/WAL, partitions и connection budget. Закрытие опроса не означает финальность результатов; дождаться drain. Результаты нескольких БД — eventual sum согласованных локальных снимков.
 - **Ошибка одной БД:** worker повторяет весь пакет; уже записанные шарды не пересчитывают дубликаты. Offsets не подтверждаются до общего успеха. Восстановить шард, не менять routing list ради обхода сбоя.
 - **Poison event:** worker завершается без commit. Исследовать событие в защищённом контуре, исправить причину и replay. Ручной skip требует отдельной аудируемой процедуры и учёта потерянного голоса; автоматического DLQ/skip нет.
 - **Backlog близок к retention:** увеличить доступный storage/retention и drain capacity до удаления сообщений. Оценивать и объём, и возраст; `last_processed` сам по себе не определяет backlog.
-- **Восстановление БД:** восстановить согласованные голоса, counters и progress, затем replay. Для полного rebuild нужны все связанные state tables и согласованный offset/group plan; нельзя обнулить только часть проекции.
+- **Восстановление БД:** восстановить согласованные dedup ledger, counters и progress, затем replay. Для полного rebuild нужны все связанные state tables и согласованный offset/group plan; нельзя обнулить только часть проекции.
 - **Ротация секрета:** admin token заменить с rollout. Signing key нельзя просто менять во время активного опроса: это изменит идентичности/дедупликацию; нужен keyring migration или завершение активных опросов. Runtime-роли и Kafka ACL ротируются отдельно.
 
 ## Локальная разработка
@@ -65,4 +65,15 @@ MODE=worker METRICS_ADDR=:9092 go run ./cmd/voting
 MODE=api COOKIE_SECURE=false go run ./cmd/voting
 ```
 
-Сначала соберите frontend (`cd web && npm ci && npm run build`), чтобы API обслуживал `web/dist`, либо запустите frontend dev server с proxy `/api`. `COOKIE_SECURE=false` допустим только для локального HTTP. Порты Compose публикуются на localhost; для телефона понадобится отдельно настроенный доступный dev адрес. Для тестового проверяются функциональность, конкурентность, replay/rollback и ограниченность ресурсов; реальные дорогостоящие испытания на 100 млн RPS не требуются.
+Сначала соберите frontend (`cd web && npm ci && npm run build`), чтобы API обслуживал `web/dist`, либо запустите frontend dev server с proxy `/api`. `COOKIE_SECURE=false` допустим только для локального HTTP. Порты Compose публикуются на localhost; для телефона понадобится отдельно настроенный доступный dev адрес. Для тестового проверяются функциональность, конкурентность, replay/rollback и ограниченность ресурсов; реальные дорогостоящие испытания на 1,8 млн RPS не требуются.
+
+
+## Sticky routing и схема БД
+
+По умолчанию `ingress.className=haproxy`, `ingress.sticky.provider=haproxy`, `ingress.sticky.enabled=true`. Нужен HAProxy Kubernetes Ingress Controller: chart задаёт `haproxy.org/cookie-persistence: voting_route` на API Service. У реплик ingress должен совпадать dynamic-cookie-key. TLS завершается на ingress; CDN/прокси передаёт cookie и не кеширует session/vote/receipt. `networkPolicy.ingressNamespace` должен совпадать с namespace контроллера. Прямой доступ к Service обходит affinity; ClientIP affinity не заменяет cookie из-за NAT.
+
+Источник: [HAProxy Service annotations](https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/service/). Для существующего legacy ingress-nginx доступны `sticky.provider=nginx` и соответствующий className: cookie affinity persistent с переносом при ошибке backend. Для новой инфраструктуры профиль не рекомендуется: [Kubernetes завершил поддержку ingress-nginx в марте 2026](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/).
+
+Capacity admission map и memory limits выбираются вместе: миллиону записей не обещан фиксированный RSS. API limit по умолчанию 2 GiB; до эфира учитывайте уникальных участников всех активных опросов/retention-окна, неравномерность сегментов и GC. При 100 млн участников нужно не менее 100 таких подов только по количеству записей, с дополнительным запасом и независимым RPS budget.
+
+Production-запуска ещё не было: используется одна начальная идемпотентная миграция с чистой схемой. Таблица `votes` со старыми индивидуальными вариантами не создаётся; runtime использует `vote_dedup` и агрегаты. Backup/PITR охватывают dedup ledger и агрегаты вместе. До реального запуска следующие изменения оформляются версионированными миграциями.

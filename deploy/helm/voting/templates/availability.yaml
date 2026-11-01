@@ -19,9 +19,17 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "voting.name" . }}
-  {{- with .Values.ingress.annotations }}
-  annotations: {{ toYaml . | nindent 4 }}
+  {{- $annotations := deepCopy .Values.ingress.annotations }}
+  {{- if and .Values.ingress.sticky.enabled (eq .Values.ingress.sticky.provider "nginx") }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/affinity" "cookie" }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/affinity-mode" "persistent" }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/session-cookie-name" .Values.ingress.sticky.cookieName }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/session-cookie-path" "/" }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/session-cookie-secure" "true" }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/session-cookie-samesite" "Lax" }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/session-cookie-change-on-failure" "true" }}
   {{- end }}
+  annotations: {{ toYaml $annotations | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   tls:

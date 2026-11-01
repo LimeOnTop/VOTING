@@ -88,16 +88,16 @@ WITH incoming AS (
  )
  ORDER BY poll_id,voter_key,ordinal
 ), inserted AS (
- INSERT INTO votes (poll_id,voter_key,options,accepted_at)
- SELECT poll_id,voter_key,options,accepted_at FROM incoming ORDER BY poll_id,voter_key
+ INSERT INTO vote_dedup (poll_id,voter_key)
+ SELECT poll_id,voter_key FROM incoming ORDER BY poll_id,voter_key
  ON CONFLICT (poll_id,voter_key) DO NOTHING
- RETURNING poll_id,voter_key,options
+ RETURNING poll_id,voter_key
 ), counters AS (
  INSERT INTO poll_counts (poll_id,shard,option_id,votes)
  SELECT i.poll_id,x.counter_shard,o.option_id,COUNT(*)
  FROM inserted i
  JOIN incoming x USING (poll_id,voter_key)
- CROSS JOIN LATERAL jsonb_array_elements_text(i.options) AS o(option_id)
+ CROSS JOIN LATERAL jsonb_array_elements_text(x.options) AS o(option_id)
  GROUP BY i.poll_id,x.counter_shard,o.option_id
  ORDER BY i.poll_id,x.counter_shard,o.option_id
  ON CONFLICT (poll_id,shard,option_id) DO UPDATE
@@ -216,24 +216,6 @@ func rollback(tx pgx.Tx, timeout time.Duration) error {
 		return nil
 	}
 	return err
-}
-
-func (r *VoteRepository) Receipt(ctx context.Context, pollID, voterKey string) ([]string, error) {
-	bounded, cancel := context.WithTimeout(ctx, r.options.QueryTimeout)
-	defer cancel()
-	var data []byte
-	err := r.pools[r.shardFor(pollID, voterKey)].QueryRow(bounded, "SELECT options FROM votes WHERE poll_id=$1 AND voter_key=$2", pollID, voterKey).Scan(&data)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read receipt: %w", err)
-	}
-	var options []string
-	if err = json.Unmarshal(data, &options); err != nil {
-		return nil, fmt.Errorf("decode receipt: %w", err)
-	}
-	return options, nil
 }
 
 const shardResultsSQL = `

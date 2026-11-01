@@ -96,6 +96,11 @@ func (c *Controller) error(w http.ResponseWriter, err error) {
 		c.fail(w, http.StatusNotFound, apperr.ErrNotFound.Error())
 	case errors.Is(err, apperr.ErrInvalidIdentity):
 		c.fail(w, http.StatusPreconditionRequired, apperr.ErrInvalidIdentity.Error())
+	case errors.Is(err, apperr.ErrAlreadyVoted):
+		c.fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, apperr.ErrVotePending):
+		w.Header().Set("Retry-After", "1")
+		c.fail(w, http.StatusTooEarly, err.Error())
 	case errors.Is(err, apperr.ErrOverloaded):
 		w.Header().Set("Retry-After", "1")
 		c.fail(w, http.StatusTooManyRequests, apperr.ErrOverloaded.Error())
@@ -186,10 +191,10 @@ func (c *Controller) receipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if options == nil {
-		c.respond(w, http.StatusOK, map[string]string{"status": "pending_or_not_submitted"})
+		c.respond(w, http.StatusOK, map[string]string{"status": "not_submitted_or_forgotten"})
 		return
 	}
-	c.respond(w, http.StatusOK, map[string]any{"status": "counted", "options": options})
+	c.respond(w, http.StatusOK, map[string]any{"status": "accepted", "options": options})
 }
 func (c *Controller) create(w http.ResponseWriter, r *http.Request) {
 	var input entity.CreatePoll

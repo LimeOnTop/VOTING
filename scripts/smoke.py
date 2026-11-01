@@ -17,11 +17,17 @@ request('/api/session',opener=browser)
 cookie='; '.join(c.name+'='+c.value for c in jar)
 def vote(n):
     req=urllib.request.Request(BASE+path+'/votes',data=json.dumps({'options':['1' if n%2==0 else '2']}).encode(),headers={'Content-Type':'application/json','Cookie':cookie})
-    with urllib.request.urlopen(req,timeout=10) as r: assert r.status==202
-with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:list(pool.map(vote,range(40)))
+    try:
+        with urllib.request.urlopen(req,timeout=10) as r: return r.status
+    except urllib.error.HTTPError as e:
+        assert e.code in (409,425),e.code
+        return e.code
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool: statuses=list(pool.map(vote,range(40)))
+assert statuses.count(202)==1,statuses
+assert vote(0)==409,"acknowledged duplicate was not rejected"
 for _ in range(60):
     _,receipt=request(path+'/receipt',opener=browser)
-    if receipt['status']=='counted':break
+    if receipt['status']=='accepted':break
     time.sleep(.5)
 else:raise AssertionError('projection timed out')
 # Also count one independent browser.
@@ -37,4 +43,4 @@ assert result['counts']['3']==1,result
 try: request(path+'/votes',{'options':['1']})
 except urllib.error.HTTPError as e:assert e.code==428
 else:raise AssertionError('missing cookie accepted')
-print(json.dumps({'status':'PASS','repeated_requests':40,'unique_voters':2,'counts':result['counts'],'poll_url':BASE+'/p/'+poll['id']},ensure_ascii=False))
+print(json.dumps({'status':'PASS','repeated_requests':40,'unique_voters':2,'published_requests':statuses.count(202),'counts':result['counts'],'poll_url':BASE+'/p/'+poll['id']},ensure_ascii=False))

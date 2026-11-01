@@ -3,10 +3,9 @@ CREATE TABLE IF NOT EXISTS polls (
  options jsonb NOT NULL, opens_at timestamptz NOT NULL, closes_at timestamptz NOT NULL,
  created_at timestamptz NOT NULL, CHECK(closes_at > opens_at)
 );
--- Poll-specific pseudonyms only; no IP, raw cookie or user-agent is persisted.
-CREATE TABLE IF NOT EXISTS votes (
+-- Minimal deduplication ledger: no individual selections, raw cookie or IP.
+CREATE TABLE IF NOT EXISTS vote_dedup (
  poll_id text NOT NULL REFERENCES polls(id), voter_key text NOT NULL,
- options jsonb NOT NULL, accepted_at timestamptz NOT NULL,
  PRIMARY KEY(poll_id,voter_key)
 );
 -- Avoid a single counter row for a hot poll; production needs independent database shards too.

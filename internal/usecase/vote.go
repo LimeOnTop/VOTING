@@ -21,7 +21,6 @@ type VotePublisher interface {
 // VoteReadRepository returns an internally consistent per-shard aggregate.
 // Cross-shard aggregation is eventual, never a claim of a global snapshot.
 type VoteReadRepository interface {
-	Receipt(context.Context, string, string) ([]string, error)
 	Results(context.Context, entity.Poll) (entity.Result, error)
 }
 
@@ -52,3 +51,10 @@ type ProjectionObserver interface {
 }
 type CacheObserver interface{ CacheAccess(string, string) }
 type HTTPObserver interface{ HTTPRequest(string, int) }
+
+// VoteAdmission is per-process duplicate suppression, not durable uniqueness.
+// finish(true) follows a successful broker ACK; finish(false) releases a failed attempt.
+type VoteAdmission interface {
+	Reserve(string, []string, time.Time) (finish func(bool), err error)
+	Lookup(string) []string
+}

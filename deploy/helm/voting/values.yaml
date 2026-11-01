@@ -15,12 +15,14 @@ config:
   kafkaTLS: "true"
   cookieSecure: "true"
   # Non-secret environment overrides; see cmd/config for validated settings.
-  env: {}
+  env:
+    DEDUP_CAPACITY: "1000000"
+    DEDUP_RETENTION: "1h"
 api:
   replicas: 3
   resources:
-    requests: {cpu: 250m, memory: 128Mi}
-    limits: {cpu: "2", memory: 512Mi}
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
   autoscaling:
     enabled: true
     minReplicas: 3
@@ -29,8 +31,8 @@ api:
 worker:
   replicas: 3
   resources:
-    requests: {cpu: 250m, memory: 128Mi}
-    limits: {cpu: "2", memory: 512Mi}
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
   keda:
     enabled: false # Requires KEDA CRDs and network access to Kafka.
     minReplicas: 3
@@ -39,7 +41,12 @@ worker:
     authenticationRef: "" # TriggerAuthentication for TLS/SASL; required when enabled.
 ingress:
   enabled: false
-  className: nginx
+  className: haproxy
+  # HAProxy Kubernetes Ingress Controller; nginx is an explicit legacy option.
+  sticky:
+    enabled: true
+    provider: haproxy
+    cookieName: voting_route
   host: voting.example.com
   tlsSecret: voting-tls
   annotations: {}
@@ -48,7 +55,7 @@ serviceMonitor:
   labels: {}
 networkPolicy:
   enabled: true
-  ingressNamespace: ingress-nginx
+  ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
   # Narrow these destination CIDRs to database/Kafka endpoints in your environment.
   dependencyCIDRs: []

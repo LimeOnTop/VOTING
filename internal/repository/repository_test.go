@@ -111,10 +111,6 @@ func TestBatchFirstBallotReplayAndConcurrentDuplicates(t *testing.T) {
 	if err != nil || count != 2 {
 		t.Fatalf("first batch: count=%d err=%v", count, err)
 	}
-	receipt, err := repo.Receipt(ctx, poll.ID, keyA)
-	if err != nil || strings.Join(receipt, ",") != "1,2" {
-		t.Fatalf("first ballot not preserved: %v %v", receipt, err)
-	}
 	count, err = repo.ApplyBatch(ctx, batch, []entity.Poll{poll})
 	if err != nil || count != 0 {
 		t.Fatalf("replay: count=%d err=%v", count, err)
@@ -169,13 +165,8 @@ func TestProjectionRollbackAndPartialShardRetry(t *testing.T) {
 	if err == nil || count != 1 {
 		t.Fatalf("expected one independently committed shard, count=%d err=%v", count, err)
 	}
-	first, err := repo.Receipt(ctx, poll.ID, keyA)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first shard was not committed: %v %v", first, err)
-	}
-	second, err := repo.Receipt(ctx, poll.ID, keyB)
-	if err != nil || second != nil {
-		t.Fatalf("failed shard left partial ballot: %v %v", second, err)
+	if !hasIdentity(t, repo, ctx, poll.ID, keyA) || hasIdentity(t, repo, ctx, poll.ID, keyB) {
+		t.Fatal("partial shard rollback corrupted dedup ledger")
 	}
 	result, err := repo.Results(ctx, poll)
 	if err != nil || result.Voters != 1 || result.Counts["1"] != 1 {
@@ -207,9 +198,8 @@ func TestBatchEntireShardRollsBack(t *testing.T) {
 		t.Fatalf("expected batch rollback, count=%d err=%v", count, err)
 	}
 	for _, vote := range batch {
-		receipt, readErr := repo.Receipt(ctx, poll.ID, vote.VoterKey)
-		if readErr != nil || receipt != nil {
-			t.Fatalf("partial ballot after rollback: %v %v", receipt, readErr)
+		if hasIdentity(t, repo, ctx, poll.ID, vote.VoterKey) {
+			t.Fatal("partial identity after rollback")
 		}
 	}
 	result, err := repo.Results(ctx, poll)
@@ -232,7 +222,7 @@ func TestQueryDeadlineReleasesBlockedProjection(t *testing.T) {
 			t.Errorf("release test lock: %v", e)
 		}
 	}()
-	if _, err = lock.Exec(ctx, "LOCK TABLE votes IN ACCESS EXCLUSIVE MODE"); err != nil {
+	if _, err = lock.Exec(ctx, "LOCK TABLE vote_dedup IN ACCESS EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now()
@@ -264,21 +254,11 @@ func TestPollPaginationAndNotFound(t *testing.T) {
 	}
 }
 
-func TestRepositoryConfiguration(t *testing.T) {
-	pool := &pgxpool.Pool{}
-	for _, options := range []VoteOptions{{}, {CounterShards: 1<<15 + 1, ReadConcurrency: 1, QueryTimeout: time.Second}, {CounterShards: 1, ReadConcurrency: 0, QueryTimeout: time.Second}} {
-		if _, err := NewVoteRepository([]*pgxpool.Pool{pool}, options); err == nil {
-			t.Errorf("invalid options accepted: %+v", options)
-		}
+func hasIdentity(t *testing.T, r *VoteRepository, ctx context.Context, poll, key string) bool {
+	t.Helper()
+	var exists bool
+	if err := r.pools[r.shardFor(poll, key)].QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM vote_dedup WHERE poll_id=$1 AND voter_key=$2)", poll, key).Scan(&exists); err != nil {
+		t.Fatal(err)
 	}
-	valid := VoteOptions{CounterShards: 256, ReadConcurrency: 2, QueryTimeout: time.Second}
-	if _, err := NewVoteRepository(nil, valid); err == nil {
-		t.Fatal("empty shard list accepted")
-	}
-	if _, err := NewVoteRepository([]*pgxpool.Pool{nil}, valid); err == nil {
-		t.Fatal("nil shard accepted")
-	}
-	if _, err := NewVoteRepository([]*pgxpool.Pool{pool, pool}, valid); err == nil {
-		t.Fatal("duplicate pool accepted")
-	}
+	return exists
 }

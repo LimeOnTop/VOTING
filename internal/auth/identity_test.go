@@ -21,6 +21,9 @@ func TestIdentityAuthenticityAndPollScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(id) != 32 || id[12] != '4' || !strings.ContainsRune("89ab", rune(id[16])) {
+		t.Fatal("identity is not compact UUIDv4")
+	}
 	for _, invalid := range []string{"", token + "x", "x" + token[1:], id + ".invalid"} {
 		if _, err = identity.ParseToken(invalid); !errors.Is(err, apperr.ErrInvalidIdentity) {
 			t.Fatalf("accepted invalid token: %v", err)

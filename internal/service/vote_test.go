@@ -21,7 +21,7 @@ func TestVoteValidatesBeforePublishingAndDoesNotMutateInput(t *testing.T) {
 		return nil
 	}}
 	observer := &observed{}
-	service, err := NewVoteService(fakePolls{}, publisher, fakeReadRepository{}, fakeIdentity{}, fixedClock{nowForTest()}, observer, voteOptions())
+	service, err := NewVoteService(fakePolls{}, publisher, fakeAdmission{}, fakeIdentity{}, fixedClock{nowForTest()}, observer, voteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestEnqueueFailureAndCancellationAreNotAcknowledged(t *testing.T) {
 	brokerFailure := errors.New("broker unavailable")
 	publisher := &fakePublisher{publish: func(context.Context, entity.Vote) error { return brokerFailure }}
 	observer := &observed{}
-	service, err := NewVoteService(fakePolls{}, publisher, fakeReadRepository{}, fakeIdentity{}, fixedClock{nowForTest()}, observer, voteOptions())
+	service, err := NewVoteService(fakePolls{}, publisher, fakeAdmission{}, fakeIdentity{}, fixedClock{nowForTest()}, observer, voteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestMaxInFlightReturnsOverloadAndReleasesSlot(t *testing.T) {
 	publisher := &fakePublisher{publish: func(context.Context, entity.Vote) error { close(entered); <-release; return nil }}
 	opt := voteOptions()
 	opt.MaxInFlight = 1
-	service, err := NewVoteService(fakePolls{}, publisher, fakeReadRepository{}, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, opt)
+	service, err := NewVoteService(fakePolls{}, publisher, fakeAdmission{}, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,31 +94,28 @@ func TestMaxInFlightReturnsOverloadAndReleasesSlot(t *testing.T) {
 		t.Fatalf("completed request leaked capacity: %v", err)
 	}
 }
-func TestReceiptUsesOnlyPollScopedIdentityAndBoundedRead(t *testing.T) {
+func TestReceiptUsesOnlyLocalPollScopedIdentity(t *testing.T) {
 	calls := 0
-	reads := fakeReadRepository{receipt: func(ctx context.Context, p, k string) ([]string, error) {
+	admission := fakeAdmission{lookup: func(key string) []string {
 		calls++
-		if p != firstID || k != firstID+":browser" {
-			t.Errorf("unscoped receipt: %s %s", p, k)
+		if key != firstID+":browser" {
+			t.Fatalf("wrong scope: %s", key)
 		}
-		if _, ok := ctx.Deadline(); !ok {
-			t.Error("receipt has no deadline")
-		}
-		return []string{"2"}, nil
+		return []string{"2"}
 	}}
-	service, err := NewVoteService(fakePolls{}, &fakePublisher{}, reads, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, voteOptions())
+	service, err := NewVoteService(fakePolls{}, &fakePublisher{}, admission, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, voteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Receipt(context.Background(), "bad", "browser"); !errors.Is(err, apperr.ErrNotFound) {
+	if _, err = service.Receipt(t.Context(), "bad", "browser"); !errors.Is(err, apperr.ErrNotFound) {
 		t.Fatal(err)
 	}
-	if _, err = service.Receipt(context.Background(), firstID, ""); !errors.Is(err, apperr.ErrInvalidIdentity) {
+	if _, err = service.Receipt(t.Context(), firstID, ""); !errors.Is(err, apperr.ErrInvalidIdentity) {
 		t.Fatal(err)
 	}
-	got, err := service.Receipt(context.Background(), firstID, "browser")
+	got, err := service.Receipt(t.Context(), firstID, "browser")
 	if err != nil || !reflect.DeepEqual(got, []string{"2"}) || calls != 1 {
-		t.Fatalf("receipt %v %v calls%d", got, err, calls)
+		t.Fatalf("receipt %v %v %d", got, err, calls)
 	}
 }
 func TestResultsUsesResolvedPollAndPropagatesRepositoryError(t *testing.T) {
@@ -151,5 +148,53 @@ func TestResultsUsesResolvedPollAndPropagatesRepositoryError(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("missing poll queried read model")
+	}
+}
+
+func TestAdmissionRejectsBeforeKafkaAndCompletesOnlyAfterAck(t *testing.T) {
+	for _, duplicate := range []error{apperr.ErrAlreadyVoted, apperr.ErrVotePending, apperr.ErrOverloaded} {
+		publisher := &fakePublisher{}
+		admission := fakeAdmission{reserve: func(string, []string, time.Time) (func(bool), error) { return nil, duplicate }}
+		s, err := NewVoteService(fakePolls{}, publisher, admission, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, voteOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Accept(t.Context(), firstID, "browser", []string{"1"}); !errors.Is(err, duplicate) {
+			t.Fatal(err)
+		}
+		if publisher.calls.Load() != 0 {
+			t.Fatal("duplicate or overloaded admission reached Kafka")
+		}
+	}
+	for _, fail := range []bool{false, true} {
+		completed := false
+		admission := fakeAdmission{reserve: func(_ string, o []string, expiry time.Time) (func(bool), error) {
+			if !expiry.Equal(openPoll(firstID).ClosesAt.Add(time.Hour)) {
+				t.Error("dedup expires before configured retention")
+			}
+			return func(accepted bool) {
+				completed = true
+				if accepted == fail {
+					t.Errorf("wrong completion accepted=%v fail=%v", accepted, fail)
+				}
+			}, nil
+		}}
+		publisher := &fakePublisher{publish: func(context.Context, entity.Vote) error {
+			if completed {
+				t.Error("reservation completed before ACK")
+			}
+			if fail {
+				return errors.New("broker down")
+			}
+			return nil
+		}}
+		s, err := NewVoteService(fakePolls{}, publisher, admission, fakeIdentity{}, fixedClock{nowForTest()}, &observed{}, voteOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.Accept(t.Context(), firstID, "browser", []string{"1"})
+		if (err != nil) != fail || !completed {
+			t.Fatalf("error %v completed %v", err, completed)
+		}
 	}
 }

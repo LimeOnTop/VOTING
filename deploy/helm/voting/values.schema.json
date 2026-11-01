@@ -119,6 +119,34 @@
           }
         }
       }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "sticky": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "provider",
+            "cookieName"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "provider": {
+              "enum": [
+                "haproxy",
+                "nginx"
+              ]
+            },
+            "cookieName": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        }
+      }
     }
   }
 }

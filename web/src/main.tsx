@@ -25,7 +25,7 @@ async function api<T>(path: string, token = "", body?: unknown): Promise<T> {
     ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
   });
   const d = await r.json();
-  if (!r.ok) throw Error(d.error || "Сервис недоступен");
+  if (!r.ok) throw Object.assign(Error(d.error || "Сервис недоступен"), {status: r.status});
   return d;
 }
 const date = (s: string) =>
@@ -58,7 +58,7 @@ function Voting() {
         if (live) {
           setP(poll);
           setSelected(receipt.options || []);
-          setPhase(receipt.status === "counted" ? "counted" : "ready");
+          setPhase(receipt.status === "accepted" ? "accepted" : "ready");
         }
       })
       .catch((e) => {
@@ -75,35 +75,19 @@ function Voting() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => {
-    if (phase !== "pending") return;
-    let live = true,
-      n = 0;
-    const t = setInterval(async () => {
-      try {
-        const d = await api<{ status: string; options?: string[] }>(
-          `/api/polls/${id}/receipt`,
-        );
-        if (live && d.status === "counted") {
-          setSelected(d.options || []);
-          setPhase("counted");
-        } else if (++n >= 30 && live) setPhase("delayed");
-      } catch {
-        if (++n >= 30 && live) setPhase("delayed");
-      }
-    }, 2000);
-    return () => {
-      live = false;
-      clearInterval(t);
-    };
-  }, [phase, id]);
   async function submit() {
     setError("");
     setPhase("sending");
     try {
       await api(`/api/polls/${id}/votes`, "", { options: selected });
-      setPhase("pending");
+      setPhase("accepted");
     } catch (e) {
+      if ((e as Error & {status?:number}).status === 409) {
+        const receipt = await api<{options?:string[]}>(`/api/polls/${id}/receipt`).catch(()=>undefined);
+        setSelected(receipt?.options || []);
+        setPhase("accepted");
+        return;
+      }
       setError((e as Error).message);
       setPhase("ready");
     }
@@ -135,7 +119,7 @@ function Voting() {
     );
   const open = now >= Date.parse(p.opens_at) && now < Date.parse(p.closes_at),
     left = Math.max(0, Math.ceil((Date.parse(p.closes_at) - now) / 1000)),
-    busy = ["sending", "pending", "delayed"].includes(phase);
+    busy = phase === "sending";
   return (
     <main className="vote-shell">
       <div className="poll-top">
@@ -154,11 +138,11 @@ function Voting() {
           ? "Можно выбрать несколько вариантов"
           : "Выберите один вариант ответа"}
       </p>
-      {phase === "counted" ? (
+      {phase === "accepted" ? (
         <div className="success" role="status">
           <span className="check">✓</span>
-          <h2>Ваш голос учтён</h2>
-          <p>Спасибо, что поделились своим мнением.</p>
+          <h2>Ваш голос принят</h2>
+          <p>Спасибо! Ответ сохранён и будет включён в результаты после обработки.</p>
           <p className="muted">
             Ваш ответ:{" "}
             {p.options
@@ -202,15 +186,6 @@ function Voting() {
           {error && (
             <p className="error" role="alert">
               {error}
-            </p>
-          )}
-          {phase === "pending" && (
-            <p role="status">Голос сохранён. Проверяем, что он учтён…</p>
-          )}
-          {phase === "delayed" && (
-            <p role="status">
-              Голос сохранён, подсчёт задерживается. Вернитесь на эту страницу
-              позже.
             </p>
           )}
           <button
