@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17.6-alpine
@@ -20,7 +20,7 @@ jobs:
           POSTGRES_DB: voting_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U voting'
+          --health-cmd "pg_isready -U voting"
           --health-interval 3s --health-timeout 3s --health-retries 20
     env:
       TEST_DATABASE_URL: postgres://voting:test-only@localhost:5432/voting_test?sslmode=disable
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: {name: coverage, path: coverage.out}
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: ./scripts/init-env.sh
