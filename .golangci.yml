@@ -1,0 +1,32 @@
+version: "2"
+run:
+  timeout: 5m
+  tests: true
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - nilerr
+    - forcetypeassert
+    - durationcheck
+    - copyloopvar
+    - gosec
+    - bodyclose
+    - noctx
+    - sqlclosecheck
+    - rowserrcheck
+    - nolintlint
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    rules:
+      # The cookie's Secure value is mandatory constructor configuration. Local
+      # HTTP is explicitly supported; config tests reject malformed bools.
+      - path: internal/controller/controller.go
+        linters: [gosec]
+        text: 'G124:'
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

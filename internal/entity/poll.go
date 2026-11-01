@@ -1,8 +1,6 @@
-package domain
+package entity
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,15 +28,8 @@ type CreatePoll struct {
 	ClosesAt time.Time `json:"closes_at"`
 }
 
-func ID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b[:])
-}
-func NewPoll(in CreatePoll, now time.Time) (Poll, error) {
-	p := Poll{ID: ID(), Question: strings.TrimSpace(in.Question), Type: in.Type, OpensAt: in.OpensAt.UTC(), ClosesAt: in.ClosesAt.UTC(), CreatedAt: now.UTC()}
+func NewPoll(in CreatePoll, id string, now time.Time) (Poll, error) {
+	p := Poll{ID: id, Question: strings.TrimSpace(in.Question), Type: in.Type, OpensAt: in.OpensAt.UTC(), ClosesAt: in.ClosesAt.UTC(), CreatedAt: now.UTC()}
 	if len(p.Question) == 0 || len([]rune(p.Question)) > 300 {
 		return p, errors.New("вопрос должен содержать от 1 до 300 символов")
 	}
