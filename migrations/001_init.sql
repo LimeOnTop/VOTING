@@ -19,3 +19,10 @@ CREATE TABLE IF NOT EXISTS poll_progress (
  voters bigint NOT NULL DEFAULT 0, updated_at timestamptz NOT NULL,
  PRIMARY KEY(poll_id,shard)
 );
+
+CREATE TABLE IF NOT EXISTS projection_topology (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), fingerprint text NOT NULL
+);
+CREATE TABLE IF NOT EXISTS finalized_polls (
+ poll_id text PRIMARY KEY REFERENCES polls(id), finalized_at timestamptz NOT NULL DEFAULT now()
+);

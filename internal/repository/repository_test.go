@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -67,7 +68,11 @@ func databasePools(t *testing.T, count int) []*pgxpool.Pool {
 func testRepositories(t *testing.T, shards int) (*PollRepository, *VoteRepository) {
 	t.Helper()
 	pools := databasePools(t, shards+1)
-	votes, err := NewVoteRepository(pools[1:], VoteOptions{CounterShards: 8, ReadConcurrency: 2, QueryTimeout: 2 * time.Second})
+	ids := make([]string, shards)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("shard-%d", i)
+	}
+	votes, err := NewVoteRepository(pools[1:], VoteOptions{ShardIDs: ids, WriteConcurrency: 2, CounterShards: 8, ReadConcurrency: 2, QueryTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +158,7 @@ func TestBatchFirstBallotReplayAndConcurrentDuplicates(t *testing.T) {
 
 func TestProjectionRollbackAndPartialShardRetry(t *testing.T) {
 	metadata, repo := testRepositories(t, 2)
+	repo.options.WriteConcurrency = 1
 	poll := testPoll(t, metadata)
 	ctx := context.Background()
 	keyA := keyForShard(repo, poll.ID, 0)
@@ -261,4 +267,136 @@ func hasIdentity(t *testing.T, r *VoteRepository, ctx context.Context, poll, key
 		t.Fatal(err)
 	}
 	return exists
+}
+
+func TestTopologyBindingRejectsChangesAndAllowsReordering(t *testing.T) {
+	_, repo := testRepositories(t, 2)
+	ctx := t.Context()
+	if err := repo.BindTopology(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo.pools[0], repo.pools[1] = repo.pools[1], repo.pools[0]
+	repo.options.ShardIDs[0], repo.options.ShardIDs[1] = repo.options.ShardIDs[1], repo.options.ShardIDs[0]
+	if err := repo.BindTopology(ctx); err != nil {
+		t.Fatalf("reordering rejected: %v", err)
+	}
+	repo.options.ShardIDs[0], repo.options.ShardIDs[1] = repo.options.ShardIDs[1], repo.options.ShardIDs[0]
+	if err := repo.BindTopology(ctx); err == nil {
+		t.Fatal("shard IDs rebound to different databases")
+	}
+	repo.options.ShardIDs[0], repo.options.ShardIDs[1] = repo.options.ShardIDs[1], repo.options.ShardIDs[0]
+	repo.options.CounterShards++
+	if err := repo.BindTopology(ctx); err == nil {
+		t.Fatal("changed counters accepted")
+	}
+	repo.options.CounterShards--
+	repo.options.ShardIDs[0] = "replacement"
+	if err := repo.BindTopology(ctx); err == nil {
+		t.Fatal("changed topology accepted")
+	}
+}
+
+func TestFinalizationPreservesResultsAndRejectsReplay(t *testing.T) {
+	metadata, repo := testRepositories(t, 2)
+	poll := testPoll(t, metadata)
+	ctx := t.Context()
+	if err := FinalizePoll(ctx, repo.pools[0], poll, time.Second); err == nil {
+		t.Fatal("open poll finalized")
+	}
+	key := keyForShard(repo, poll.ID, 0)
+	votes := []entity.Vote{ballot(poll, key, "1")}
+	if _, err := repo.ApplyBatch(ctx, votes, []entity.Poll{poll}); err != nil {
+		t.Fatal(err)
+	}
+	poll.ClosesAt = time.Now().Add(-time.Second)
+	for _, pool := range repo.pools {
+		if _, err := pool.Exec(ctx, ensurePollsSQL, mustPollJSON(t, poll)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, "UPDATE polls SET opens_at=$2,closes_at=$3 WHERE id=$1", poll.ID, poll.OpensAt, poll.ClosesAt); err != nil {
+			t.Fatal(err)
+		}
+		lock, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = lock.Exec(ctx, "SELECT id FROM polls WHERE id=$1 FOR SHARE", poll.ID); err != nil {
+			t.Fatal(err)
+		}
+		finalizeErr := FinalizePoll(ctx, pool, poll, 50*time.Millisecond)
+		if err = lock.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if finalizeErr == nil {
+			t.Fatal("finalization bypassed active projection lock")
+		}
+		var sealed bool
+		if err = pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM finalized_polls WHERE poll_id=$1)", poll.ID).Scan(&sealed); err != nil || sealed {
+			t.Fatalf("failed finalization left barrier: sealed=%v err=%v", sealed, err)
+		}
+		for range 2 {
+			if err := FinalizePoll(ctx, pool, poll, time.Second); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if hasIdentity(t, repo, ctx, poll.ID, key) {
+		t.Fatal("finalized identities retained")
+	}
+	// Both a replay and a previously unseen key must leave frozen results unchanged.
+	votes = append(votes, ballot(poll, keyForShard(repo, poll.ID, 1), "2"))
+	if n, err := repo.ApplyBatch(ctx, votes, []entity.Poll{poll}); err != nil || n != 0 {
+		t.Fatalf("finalized replay: count=%d err=%v", n, err)
+	}
+	result, err := repo.Results(ctx, poll)
+	if err != nil || result.Voters != 1 || result.Counts["1"] != 1 || result.Counts["2"] != 0 {
+		t.Fatalf("frozen results changed: %+v %v", result, err)
+	}
+}
+
+func mustPollJSON(t *testing.T, poll entity.Poll) []byte {
+	t.Helper()
+	data, err := json.Marshal([]entity.Poll{poll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestIndependentShardsWriteConcurrently(t *testing.T) {
+	metadata, repo := testRepositories(t, 2)
+	poll := testPoll(t, metadata)
+	ctx := t.Context()
+	lock, err := repo.pools[0].Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err = lock.Exec(ctx, "LOCK TABLE vote_dedup IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	keyA := keyForShard(repo, poll.ID, 0)
+	keyB := keyForShard(repo, poll.ID, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, applyErr := repo.ApplyBatch(ctx, []entity.Vote{ballot(poll, keyA, "1"), ballot(poll, keyB, "2")}, []entity.Poll{poll})
+		done <- applyErr
+	}()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for !hasIdentity(t, repo, ctx, poll.ID, keyB) {
+		select {
+		case <-deadline.C:
+			t.Fatal("independent shard blocked behind locked shard")
+		case <-tick.C:
+		}
+	}
+	if err = lock.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
 }

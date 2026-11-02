@@ -61,6 +61,18 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}
+	if cfg.Mode == "finalize" {
+		poll, getErr := repository.NewPollRepository(primary).GetByID(startup, cfg.FinalizePollID)
+		if getErr != nil {
+			return fmt.Errorf("resolve finalization poll: %w", getErr)
+		}
+		for _, pool := range shards {
+			if err = repository.FinalizePoll(ctx, pool, poll, cfg.QueryTimeout); err != nil {
+				return fmt.Errorf("finalize poll: %w", err)
+			}
+		}
+		return nil
+	}
 	clock := systemClock{}
 	metrics := observability.NewMetrics()
 	metadata := repository.NewPollRepository(primary)
@@ -75,7 +87,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err = pollService.Warm(startup, cfg.WarmPollIDs); err != nil {
 		return fmt.Errorf("warm poll metadata: %w", err)
 	}
-	votes, err := repository.NewVoteRepository(shards, repository.VoteOptions{CounterShards: cfg.Database.CounterShards, ReadConcurrency: cfg.Database.ReadConcurrency, QueryTimeout: cfg.ProjectionTimeout})
+	votes, err := repository.NewVoteRepository(shards, repository.VoteOptions{ShardIDs: cfg.Database.VoteShardIDs, WriteConcurrency: cfg.Database.WriteConcurrency, CounterShards: cfg.Database.CounterShards, ReadConcurrency: cfg.Database.ReadConcurrency, QueryTimeout: cfg.ProjectionTimeout})
 	if err != nil {
 		return fmt.Errorf("initialize vote repository: %w", err)
 	}
@@ -83,6 +95,10 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	life, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if cfg.Mode == "worker" {
+		if err = votes.BindTopology(startup); err != nil {
+			return fmt.Errorf("bind projection topology: %w", err)
+		}
+
 		consumer, e := client.NewVoteConsumer(kafkaOptions)
 		if e != nil {
 			return fmt.Errorf("initialize Kafka consumer: %w", e)

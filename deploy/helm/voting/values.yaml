@@ -15,7 +15,7 @@ config:
   # Non-secret environment overrides; see cmd/config for validated settings.
   env:
     DEDUP_CAPACITY: "1000000"
-    DEDUP_RETENTION: "1h"
+    DEDUP_RETENTION: "5m"
 api:
   replicas: 3
   resources:

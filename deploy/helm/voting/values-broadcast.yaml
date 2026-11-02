@@ -1,0 +1,16 @@
+# Apply together with environment-specific database, broker and ingress settings.
+api:
+  replicas: 200
+  resources:
+    requests: {cpu: "2", memory: 1Gi}
+    limits: {cpu: "4", memory: 2Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 200
+    maxReplicas: 400
+config:
+  env:
+    DEDUP_CAPACITY: "1000000"
+    DEDUP_RETENTION: "5m"
+    DB_MIN_CONNECTIONS: "0"
+    DB_MAX_CONNECTIONS: "4"
