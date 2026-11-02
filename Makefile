@@ -19,8 +19,8 @@ security:
 web:
 	cd web && npm ci && npm run build
 helm:
-	helm lint deploy/helm/voting --strict --set image.tag=check
-	helm template voting deploy/helm/voting --set image.tag=check > /dev/null
+	helm lint deploy/helm/voting --strict --set image.tag=check --set 'networkPolicy.dependencyCIDRs[0]=192.0.2.0/24'
+	helm template voting deploy/helm/voting --set image.tag=check --set 'networkPolicy.dependencyCIDRs[0]=192.0.2.0/24' > /dev/null
 swagger:
 	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g main.go -d cmd/voting,internal/controller,internal/entity --parseInternal --outputTypes yaml -o api
 	mv api/swagger.yaml api/swagger.yml

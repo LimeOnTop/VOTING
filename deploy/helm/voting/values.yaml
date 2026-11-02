@@ -54,6 +54,8 @@ networkPolicy:
   enabled: true
   ingressNamespace: haproxy-controller
   monitoringNamespace: monitoring
+  dnsNamespace: kube-system
+  dnsCIDRs: [] # NodeLocal DNS addresses as /32 or /128.
   # Narrow these destination CIDRs to database/Kafka endpoints in your environment.
   dependencyCIDRs: []
   databasePort: 5432
@@ -65,5 +67,10 @@ topologySpread:
   enabled: true
 migration:
   enabled: true
+  activeDeadlineSeconds: 120
+  startupTimeoutSeconds: 90
+lifecycle:
+  shutdownTimeoutSeconds: 20
+  terminationGracePeriodSeconds: 120
 nodeSelector: {}
 tolerations: []

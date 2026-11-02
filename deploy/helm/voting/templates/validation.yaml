@@ -1,0 +1,10 @@
+{{- if and .Values.networkPolicy.enabled (empty .Values.networkPolicy.dependencyCIDRs) -}}
+{{- fail "networkPolicy.dependencyCIDRs is required when NetworkPolicy is enabled" -}}
+{{- end -}}
+{{- if le (int .Values.lifecycle.terminationGracePeriodSeconds) (mul 2 (int .Values.lifecycle.shutdownTimeoutSeconds)) -}}
+{{- fail "terminationGracePeriodSeconds must exceed twice shutdownTimeoutSeconds to cover HTTP and metrics shutdown" -}}
+{{- end -}}
+
+{{- if and .Values.migration.enabled (ge (int .Values.migration.startupTimeoutSeconds) (int .Values.migration.activeDeadlineSeconds)) -}}
+{{- fail "migration.startupTimeoutSeconds must be less than activeDeadlineSeconds" -}}
+{{- end -}}

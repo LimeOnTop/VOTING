@@ -46,7 +46,7 @@ MODE=api COOKIE_SECURE=false go run ./cmd/voting
 
 Producer получает write/describe на topic, consumer — read/describe и доступ к своей group. Административный bearer token даёт доступ ко всей админке; отдельных ролей автора и аналитика нет. При внешнем контроле доступа защищайте и `/admin`, и `/api/v1/admin/*`.
 
-В файле настроек окружения укажите Kafka, TLS ingress, namespace ingress controller, ресурсы и `networkPolicy.dependencyCIDRs`. Без разрешённых CIDR NetworkPolicy блокирует доступ к БД/Kafka. Разрешите адреса всех brokers, возвращаемых Kafka metadata, и всех SQL-шардов. Metrics Server нужен для HPA, KEDA/Prometheus Operator — для соответствующих опций chart.
+В файле настроек окружения укажите Kafka, TLS ingress, namespace ingress controller, ресурсы и `networkPolicy.dependencyCIDRs`. При включённой NetworkPolicy список CIDR обязателен; без него Helm прекращает рендеринг. Разрешите адреса всех brokers, возвращаемых Kafka metadata, и всех SQL-шардов. Metrics Server нужен для HPA, KEDA/Prometheus Operator — для соответствующих опций chart. KEDA получает TLS из `config.kafkaTLS`; `TriggerAuthentication` передаёт SASL credentials и при необходимости CA, без повторного параметра `tls`. Доступ KEDA controller к Kafka разрешается сетевой политикой его namespace.
 
 ```sh
 helm upgrade --install voting deploy/helm/voting \
@@ -59,13 +59,15 @@ helm upgrade --install voting deploy/helm/voting \
   --atomic --wait --timeout 5m
 ```
 
-Migration Job выполняется до установки/обновления. При внешнем запуске миграций установите `migration.enabled=false`. Миграции должны быть совместимы со старым runtime на время rolling update; Helm rollback не откатывает схему БД.
+Migration Job выполняется до установки/обновления. Перед ним создаётся отдельная hook NetworkPolicy с доступом только к DNS и PostgreSQL; она удаляется после успешного завершения hooks. При ошибке Job и policy остаются для диагностики и пересоздаются при следующей попытке. `migration.startupTimeoutSeconds=90` ограничивает запуск приложения и миграцию, `migration.activeDeadlineSeconds=120` — весь Job. При внешнем запуске миграций установите `migration.enabled=false`. Миграции должны быть совместимы со старым runtime на время rolling update; Helm rollback не откатывает схему БД.
 
 По умолчанию cookie affinity настраивается для HAProxy Kubernetes Ingress Controller: `ingress.className=haproxy`, `ingress.sticky.provider=haproxy`. Chart задаёт `haproxy.org/cookie-persistence` на API Service. У реплик контроллера должен совпадать dynamic-cookie-key. Для существующего ingress-nginx есть профиль `sticky.provider=nginx` с соответствующим className.
 
+Если используется NodeLocal DNS, задайте адреса в `networkPolicy.dnsCIDRs` как `/32` или `/128`; `dnsNamespace` указывает namespace обычного кластерного DNS.
+
 TLS завершается на ingress. Прокси передаёт cookie и не кеширует session/vote/receipt. Прямой доступ к Service обходит cookie affinity. Документация параметра: [HAProxy cookie persistence](https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/service/).
 
-Перед эфиром увеличьте число подов и нод, прогрейте опросы и проверьте connection budget каждой БД. Число активных consumers ограничено Kafka partitions. Grace period chart — 30 секунд при shutdown timeout приложения 20 секунд.
+Перед эфиром увеличьте число подов и нод, прогрейте опросы и проверьте connection budget каждой БД. Число активных consumers ограничено Kafka partitions. `lifecycle.terminationGracePeriodSeconds=120` задаёт grace period, `lifecycle.shutdownTimeoutSeconds=20` — timeout завершения каждого HTTP-сервера. Grace period должен превышать два shutdown timeout и оставлять запас на закрытие Kafka-клиентов.
 
 ## Эксплуатация
 

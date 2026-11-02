@@ -28,6 +28,13 @@ func (healthy) Ready() bool { return true }
 
 type observer struct{}
 
+type routeObserver struct {
+	route  string
+	status int
+}
+
+func (o *routeObserver) HTTPRequest(route string, status int) { o.route = route; o.status = status }
+
 func (observer) HTTPRequest(string, int) {}
 func TestHTTPBoundaries(t *testing.T) {
 	root := t.TempDir()
@@ -41,7 +48,8 @@ func TestHTTPBoundaries(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	c, err := NewController(pollStub{}, votingStub{}, resultsStub{}, identityStub{}, healthy{}, observer{}, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AdminToken: strings.Repeat("a", 24), WebDir: root, CookieName: "voting_id", CookieMaxAge: time.Hour, MetadataMaxAge: time.Second, RequestTimeout: time.Second, MaxBodyBytes: 128, SecureCookie: true})
+	routes := &routeObserver{}
+	c, err := NewController(pollStub{}, votingStub{}, resultsStub{}, identityStub{}, healthy{}, routes, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AdminToken: strings.Repeat("a", 24), WebDir: root, CookieName: "voting_id", CookieMaxAge: time.Hour, MetadataMaxAge: time.Second, RequestTimeout: time.Second, MaxBodyBytes: 128, SecureCookie: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +79,9 @@ func TestHTTPBoundaries(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/session", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
+	if routes.route != "GET /api/v1/session" || routes.status != http.StatusOK {
+		t.Fatalf("incorrect metric labels: %q %d", routes.route, routes.status)
+	}
 	cookies := res.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unsafe cookie: %v", cookies)

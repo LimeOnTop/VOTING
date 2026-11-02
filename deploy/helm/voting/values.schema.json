@@ -24,6 +24,13 @@
         "tag": {
           "type": "string",
           "minLength": 1
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
         }
       }
     },
@@ -49,6 +56,24 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 100
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object"
+            },
+            "limits": {
+              "type": "object"
             }
           }
         }
@@ -71,6 +96,31 @@
             "maxReplicas": {
               "type": "integer",
               "minimum": 1
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "authenticationRef": {
+              "type": "string"
+            },
+            "lagThreshold": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object"
+            },
+            "limits": {
+              "type": "object"
             }
           }
         }
@@ -113,10 +163,51 @@
                 "MODE",
                 "ADDR",
                 "METRICS_ADDR",
-                "WEB_DIR"
+                "WEB_DIR",
+                "SHUTDOWN_TIMEOUT"
               ]
             }
           }
+        },
+        "kafkaBrokers": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kafkaTopic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kafkaGroup": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kafkaTLS": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          ]
+        },
+        "cookieSecure": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          ]
         }
       }
     },
@@ -145,6 +236,131 @@
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
             }
           }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tlsSecret": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressNamespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monitoringNamespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dnsNamespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dependencyCIDRs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "dnsCIDRs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "databasePort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "kafkaPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "activeDeadlineSeconds",
+        "startupTimeoutSeconds"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "startupTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": [
+        "shutdownTimeoutSeconds",
+        "terminationGracePeriodSeconds"
+      ],
+      "properties": {
+        "shutdownTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "topologySpread": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
         }
       }
     }
