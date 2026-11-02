@@ -51,7 +51,7 @@ func (i *AnonymousIdentity) sign(value string) string {
 func (i *AnonymousIdentity) NewToken() (string, error) {
 	id, err := i.ids.NewID()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("generate anonymous identity: %w", err)
 	}
 	return id + "." + i.sign(id), nil
 }

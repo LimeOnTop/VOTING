@@ -42,7 +42,7 @@ func (s *VoteService) Accept(ctx context.Context, pollID, browserID string, opti
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("wait for vote admission: %w", ctx.Err())
 	default:
 		return apperr.ErrOverloaded
 	}
@@ -50,18 +50,18 @@ func (s *VoteService) Accept(ctx context.Context, pollID, browserID string, opti
 	defer cancel()
 	poll, err := s.polls.GetByID(bounded, pollID)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve voting poll: %w", err)
 	}
 	now := s.clock.Now().UTC()
 	if err = poll.ValidateVote(options, now); err != nil {
-		return &apperr.Validation{Cause: err}
+		return fmt.Errorf("validate vote: %w", &apperr.Validation{Cause: err})
 	}
 	selected := append([]string(nil), options...)
 	sort.Strings(selected)
 	vote := entity.Vote{Version: entity.VoteVersion, PollID: pollID, VoterKey: s.identity.VoterKey(pollID, browserID), Options: selected, AcceptedAt: now}
 	finish, err := s.admission.Reserve(vote.VoterKey, selected, poll.ClosesAt.Add(s.options.DedupRetention))
 	if err != nil {
-		return err
+		return fmt.Errorf("reserve vote: %w", err)
 	}
 	accepted := false
 	defer func() { finish(accepted) }()
@@ -82,7 +82,7 @@ func (s *VoteService) Receipt(ctx context.Context, pollID, browserID string) ([]
 		return nil, apperr.ErrInvalidIdentity
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read vote receipt: %w", err)
 	}
 	return s.admission.Lookup(s.identity.VoterKey(pollID, browserID)), nil
 }
@@ -106,7 +106,11 @@ func (s *ResultsService) Get(ctx context.Context, id string) (entity.Result, err
 	defer cancel()
 	poll, err := s.polls.GetByID(bounded, id)
 	if err != nil {
-		return entity.Result{}, err
+		return entity.Result{}, fmt.Errorf("resolve results poll: %w", err)
 	}
-	return s.repository.Results(bounded, poll)
+	result, err := s.repository.Results(bounded, poll)
+	if err != nil {
+		return entity.Result{}, fmt.Errorf("read poll results: %w", err)
+	}
+	return result, nil
 }

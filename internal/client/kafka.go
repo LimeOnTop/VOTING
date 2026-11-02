@@ -111,7 +111,7 @@ var _ usecase.HealthCheck = (*VotePublisher)(nil)
 
 func NewVotePublisher(options KafkaOptions) (*VotePublisher, error) {
 	if err := options.validate(false); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("configure Kafka publisher: %w", err)
 	}
 	options.Brokers = append([]string(nil), options.Brokers...)
 	t := transport(options)
@@ -128,13 +128,21 @@ func (p *VotePublisher) Publish(ctx context.Context, v entity.Vote) error {
 	}
 	return nil
 }
-func (p *VotePublisher) Ping(ctx context.Context) error { return p.health.Ping(ctx) }
+func (p *VotePublisher) Ping(ctx context.Context) error {
+	if err := p.health.Ping(ctx); err != nil {
+		return fmt.Errorf("ping vote publisher: %w", err)
+	}
+	return nil
+}
 func (p *VotePublisher) Close() error {
 	err := p.writer.Close()
 	if p.transport != nil {
 		p.transport.CloseIdleConnections()
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("close vote publisher: %w", err)
+	}
+	return nil
 }
 
 type messageReader interface {
@@ -156,7 +164,7 @@ var _ usecase.HealthCheck = (*VoteConsumer)(nil)
 
 func NewVoteConsumer(options KafkaOptions) (*VoteConsumer, error) {
 	if err := options.validate(true); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("configure Kafka consumer: %w", err)
 	}
 	options.Brokers = append([]string(nil), options.Brokers...)
 	cfg := kafka.ReaderConfig{Brokers: options.Brokers, Topic: options.Topic, GroupID: options.Group, Dialer: dialer(options), MinBytes: options.MinBytes, MaxBytes: options.MaxBytes, MaxWait: options.ConsumerBatchWait, ReadBatchTimeout: options.ReadTimeout, CommitInterval: 0, StartOffset: kafka.FirstOffset}
@@ -170,11 +178,11 @@ func NewVoteConsumer(options KafkaOptions) (*VoteConsumer, error) {
 func (c *VoteConsumer) FetchBatch(ctx context.Context) ([]usecase.Delivery, error) {
 	first, err := c.reader.FetchMessage(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read vote delivery: %w", err)
 	}
 	delivery, err := decode(first)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read vote delivery: %w", err)
 	}
 	batch := make([]usecase.Delivery, 0, c.options.ConsumerBatchSize)
 	batch = append(batch, delivery)
@@ -185,7 +193,7 @@ func (c *VoteConsumer) FetchBatch(ctx context.Context) ([]usecase.Delivery, erro
 		m, err := c.reader.FetchMessage(window)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return nil, fmt.Errorf("read vote delivery: %w", ctx.Err())
 			}
 			if errors.Is(err, context.DeadlineExceeded) && window.Err() != nil {
 				return batch, nil
@@ -194,12 +202,12 @@ func (c *VoteConsumer) FetchBatch(ctx context.Context) ([]usecase.Delivery, erro
 		}
 		d, err := decode(m)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read vote delivery: %w", err)
 		}
 		batch = append(batch, d)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read vote delivery: %w", err)
 	}
 	return batch, nil
 }
@@ -245,13 +253,21 @@ func (c *VoteConsumer) Commit(ctx context.Context, positions []usecase.Position)
 	}
 	return nil
 }
-func (c *VoteConsumer) Ping(ctx context.Context) error { return c.health.Ping(ctx) }
+func (c *VoteConsumer) Ping(ctx context.Context) error {
+	if err := c.health.Ping(ctx); err != nil {
+		return fmt.Errorf("ping vote consumer: %w", err)
+	}
+	return nil
+}
 func (c *VoteConsumer) Close() error {
 	err := c.reader.Close()
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("close vote consumer: %w", err)
+	}
+	return nil
 }
 
 type brokerProbe func(context.Context, string) error
@@ -267,21 +283,21 @@ func newHealth(o KafkaOptions, t *kafka.Transport) *kafkaHealth {
 		// Metadata must not request topic creation.
 		result, err := client.Metadata(ctx, &kafka.MetadataRequest{Addr: kafka.TCP(addr), Topics: []string{o.Topic}})
 		if err != nil {
-			return err
+			return fmt.Errorf("read Kafka metadata: %w", err)
 		}
 		for _, topic := range result.Topics {
 			if topic.Name != o.Topic {
 				continue
 			}
 			if topic.Error != nil {
-				return topic.Error
+				return fmt.Errorf("read Kafka topic metadata: %w", topic.Error)
 			}
 			if len(topic.Partitions) == 0 {
 				return errors.New("kafka topic has no partitions")
 			}
 			for _, p := range topic.Partitions {
 				if p.Error != nil {
-					return p.Error
+					return fmt.Errorf("read Kafka partition metadata: %w", p.Error)
 				}
 				if p.Leader.Host == "" {
 					return errors.New("kafka partition has no leader")

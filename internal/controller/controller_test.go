@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,10 +14,17 @@ import (
 	"time"
 
 	"github.com/LimeOnTop/VOTING/internal/apperr"
+	"github.com/LimeOnTop/VOTING/internal/entity"
 	"github.com/LimeOnTop/VOTING/internal/usecase"
 )
 
-type pollStub struct{ usecase.Poll }
+type pollStub struct {
+	usecase.Poll
+	get func(context.Context, string) (entity.Poll, error)
+}
+
+func (p pollStub) GetByID(ctx context.Context, id string) (entity.Poll, error) { return p.get(ctx, id) }
+
 type votingStub struct{ usecase.Voting }
 type resultsStub struct{ usecase.Results }
 type identityStub struct{ usecase.AnonymousIdentity }
@@ -26,8 +35,6 @@ type healthy struct{}
 
 func (healthy) Ready() bool { return true }
 
-type observer struct{}
-
 type routeObserver struct {
 	route  string
 	status int
@@ -35,7 +42,6 @@ type routeObserver struct {
 
 func (o *routeObserver) HTTPRequest(route string, status int) { o.route = route; o.status = status }
 
-func (observer) HTTPRequest(string, int) {}
 func TestHTTPBoundaries(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("app-shell"), 0600); err != nil {
@@ -48,8 +54,22 @@ func TestHTTPBoundaries(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
+	type traceKey struct{}
+	var expectedDeadline time.Time
+	polls := pollStub{get: func(ctx context.Context, id string) (entity.Poll, error) {
+		if ctx.Value(traceKey{}) != "http-trace" {
+			t.Error("HTTP context values lost")
+		}
+		if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(expectedDeadline) {
+			t.Error("HTTP context deadline lost")
+		}
+		if err := ctx.Err(); err != nil {
+			return entity.Poll{}, fmt.Errorf("read poll: %w", err)
+		}
+		return entity.Poll{ID: id}, nil
+	}}
 	routes := &routeObserver{}
-	c, err := NewController(pollStub{}, votingStub{}, resultsStub{}, identityStub{}, healthy{}, routes, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AdminToken: strings.Repeat("a", 24), WebDir: root, CookieName: "voting_id", CookieMaxAge: time.Hour, MetadataMaxAge: time.Second, RequestTimeout: time.Second, MaxBodyBytes: 128, SecureCookie: true})
+	c, err := NewController(polls, votingStub{}, resultsStub{}, identityStub{}, healthy{}, routes, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AdminToken: strings.Repeat("a", 24), WebDir: root, CookieName: "voting_id", CookieMaxAge: time.Hour, MetadataMaxAge: time.Second, RequestTimeout: time.Second, MaxBodyBytes: 128, SecureCookie: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +120,21 @@ func TestHTTPBoundaries(t *testing.T) {
 	if strings.Contains(res.Body.String(), "private-material") {
 		t.Fatal("static root escaped")
 	}
+	expectedDeadline = time.Now().Add(500 * time.Millisecond)
+	requestContext, cancel := context.WithDeadline(context.WithValue(t.Context(), traceKey{}, "http-trace"), expectedDeadline)
+	defer cancel()
+	req = httptest.NewRequestWithContext(requestContext, http.MethodGet, "/api/v1/polls/11111111111141118111111111111111", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatal("HTTP request failed", res.Code)
+	}
+	cancel()
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatal("canceled HTTP request was acknowledged", res.Code)
+	}
 }
 func TestStrictJSONBoundary(t *testing.T) {
 	c := &Controller{options: Options{MaxBodyBytes: 32}}
@@ -120,7 +155,10 @@ func TestAdmissionErrorsHaveDistinctHTTPStatuses(t *testing.T) {
 		retry  string
 	}{{apperr.ErrAlreadyVoted, 409, ""}, {apperr.ErrVotePending, 425, "1"}, {apperr.ErrOverloaded, 429, "1"}} {
 		w := httptest.NewRecorder()
-		c.error(w, tc.err)
+		c.error(w, fmt.Errorf("usecase boundary: %w", tc.err))
+		if strings.Contains(w.Body.String(), "usecase boundary") {
+			t.Fatal("internal error context exposed in HTTP response")
+		}
 		if w.Code != tc.status || w.Header().Get("Retry-After") != tc.retry {
 			t.Fatalf("status=%d retry=%s", w.Code, w.Header().Get("Retry-After"))
 		}

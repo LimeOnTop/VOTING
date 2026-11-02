@@ -24,7 +24,12 @@ var _ usecase.HealthCheck = (*PollRepository)(nil)
 
 func NewPollRepository(pool *pgxpool.Pool) *PollRepository { return &PollRepository{pool: pool} }
 
-func (r *PollRepository) Ping(ctx context.Context) error { return r.pool.Ping(ctx) }
+func (r *PollRepository) Ping(ctx context.Context) error {
+	if err := r.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping metadata database: %w", err)
+	}
+	return nil
+}
 
 func (r *PollRepository) Create(ctx context.Context, poll entity.Poll) error {
 	options, err := json.Marshal(poll.Options)
@@ -55,7 +60,11 @@ func scanPoll(row pgx.Row) (entity.Poll, error) {
 }
 
 func (r *PollRepository) GetByID(ctx context.Context, id string) (entity.Poll, error) {
-	return scanPoll(r.pool.QueryRow(ctx, "SELECT "+pollColumns+" FROM polls WHERE id=$1", id))
+	poll, err := scanPoll(r.pool.QueryRow(ctx, "SELECT "+pollColumns+" FROM polls WHERE id=$1", id))
+	if err != nil {
+		return entity.Poll{}, fmt.Errorf("query poll: %w", err)
+	}
+	return poll, nil
 }
 
 func (r *PollRepository) GetAll(ctx context.Context, limit, offset int) ([]entity.Poll, error) {
@@ -68,7 +77,7 @@ func (r *PollRepository) GetAll(ctx context.Context, limit, offset int) ([]entit
 	for rows.Next() {
 		poll, scanErr := scanPoll(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return nil, fmt.Errorf("scan listed poll: %w", scanErr)
 		}
 		polls = append(polls, poll)
 	}

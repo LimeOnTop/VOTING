@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/LimeOnTop/VOTING/internal/apperr"
@@ -33,7 +34,7 @@ func NewPollRepository(source usecase.PollRepository, options PollOptions, clock
 	}
 	c, err := newLocal[entity.Poll]("poll", options.Capacity, options.Shards, options.MaxLoads, options.LoadTimeout, clock, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize poll cache: %w", err)
 	}
 	return &PollRepository{source: source, cache: c, options: options}, nil
 }
@@ -44,7 +45,7 @@ func clonePoll(p entity.Poll) entity.Poll {
 func (r *PollRepository) Create(ctx context.Context, p entity.Poll) error {
 	saved := clonePoll(p)
 	if err := r.source.Create(ctx, clonePoll(saved)); err != nil {
-		return err
+		return fmt.Errorf("persist cached poll: %w", err)
 	}
 	r.cache.put(p.ID, record[entity.Poll]{value: saved}, r.options.TTL)
 	return nil
@@ -62,8 +63,15 @@ func (r *PollRepository) GetByID(ctx context.Context, id string) (entity.Poll, e
 		}
 		return 0
 	})
-	return clonePoll(p), err
+	if err != nil {
+		return entity.Poll{}, fmt.Errorf("read cached poll: %w", err)
+	}
+	return clonePoll(p), nil
 }
 func (r *PollRepository) GetAll(ctx context.Context, limit, offset int) ([]entity.Poll, error) {
-	return r.source.GetAll(ctx, limit, offset)
+	polls, err := r.source.GetAll(ctx, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list uncached polls: %w", err)
+	}
+	return polls, nil
 }

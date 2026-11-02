@@ -143,10 +143,17 @@ func TestNegativeTTLAndInfrastructureErrors(t *testing.T) {
 }
 
 func TestCallerCancellationDoesNotCancelSharedLoad(t *testing.T) {
+	type traceKey struct{}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
 	source := &pollSource{load: func(ctx context.Context, _ string) (entity.Poll, error) {
+		if ctx.Value(traceKey{}) != "load-trace" {
+			t.Error("shared load lost context values")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("shared load has no own deadline")
+		}
 		close(entered)
 		select {
 		case <-ctx.Done():
@@ -160,7 +167,7 @@ func TestCallerCancellationDoesNotCancelSharedLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), traceKey{}, "load-trace"))
 	first := make(chan error, 1)
 	go func() { _, e := repo.GetByID(ctx, "p"); first <- e }()
 	<-entered
