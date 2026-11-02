@@ -44,6 +44,7 @@ spec:
         topic: {{ .Values.config.kafkaTopic | quote }}
         lagThreshold: {{ .Values.worker.keda.lagThreshold | quote }}
         offsetResetPolicy: earliest
+        tls: {{ ternary "enable" "disable" (eq (toString .Values.config.kafkaTLS) "true") | quote }}
       authenticationRef:
         name: {{ required "worker.keda.authenticationRef is required with KEDA" .Values.worker.keda.authenticationRef }}
 {{- end }}

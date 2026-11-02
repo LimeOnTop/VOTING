@@ -31,7 +31,7 @@ spec:
     spec:
       serviceAccountName: {{ include "voting.name" $ }}
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: {{ $.Values.lifecycle.terminationGracePeriodSeconds }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -69,6 +69,9 @@ spec:
             - secretRef: {name: {{ index $.Values (printf "%sSecret" $component) }}}
           env:
             - {name: MODE, value: {{ $component | quote }}}
+            - {name: ADDR, value: ":8080"}
+            - {name: METRICS_ADDR, value: ":9090"}
+            - {name: SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $.Values.lifecycle.shutdownTimeoutSeconds) | quote }}}
           ports:
             {{- if eq $component "api" }}
             - {name: http, containerPort: 8080}
@@ -77,13 +80,16 @@ spec:
           startupProbe:
             httpGet: {path: /healthz, port: metrics}
             periodSeconds: 2
+            timeoutSeconds: 2
             failureThreshold: 30
           livenessProbe:
             httpGet: {path: /healthz, port: metrics}
             periodSeconds: 10
+            timeoutSeconds: 2
           readinessProbe:
             httpGet: {path: /readyz, port: {{ if eq $component "api" }}http{{ else }}metrics{{ end }}}
             periodSeconds: 3
+            timeoutSeconds: 2
             failureThreshold: 2
           resources:
             {{- toYaml $cfg.resources | nindent 12 }}

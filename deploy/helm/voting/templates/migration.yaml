@@ -9,8 +9,13 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 3
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voting
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrate
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -27,9 +32,15 @@ spec:
       containers:
         - name: migrate
           image: {{ include "voting.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           envFrom:
             - secretRef: {name: {{ .Values.migrationSecret }}}
-          env: [{name: MODE, value: migrate}]
+          env:
+            {{- range $key, $value := omit .Values.config.env "STARTUP_TIMEOUT" }}
+            - {name: {{ $key | quote }}, value: {{ $value | quote }}}
+            {{- end }}
+            - {name: MODE, value: migrate}
+            - {name: STARTUP_TIMEOUT, value: {{ printf "%ds" (int .Values.migration.startupTimeoutSeconds) | quote }}}
           resources:
             requests: {cpu: 100m, memory: 64Mi}
             limits: {cpu: "1", memory: 256Mi}

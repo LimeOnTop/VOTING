@@ -394,6 +394,7 @@ func (c *Controller) middleware(next http.Handler) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), c.options.RequestTimeout)
 		defer cancel()
-		next.ServeHTTP(tracked, r.WithContext(ctx))
+		r = r.WithContext(ctx)
+		next.ServeHTTP(tracked, r)
 	})
 }
