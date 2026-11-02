@@ -10,7 +10,8 @@ func TestConfigurationValidation(t *testing.T) {
 		name, key, value string
 		valid            bool
 	}{
-		{"defaults", "", "", true}, {"overflow", "DB_MAX_CONNECTIONS", "4294967297", false},
+		{"defaults", "", "", true}, {"lazy pool", "DB_MIN_CONNECTIONS", "0", true}, {"negative minimum", "DB_MIN_CONNECTIONS", "-1", false}, {"finalize requires confirmation", "MODE", "finalize", false},
+		{"duplicate shard IDs", "VOTE_SHARD_IDS", "a,a", false}, {"missing shard IDs", "VOTE_DATABASE_URLS", `["postgres://localhost/a","postgres://localhost/b"]`, false}, {"overflow", "DB_MAX_CONNECTIONS", "4294967297", false},
 		{"submillisecond", "DB_STATEMENT_TIMEOUT", "1ns", false}, {"boolean typo", "COOKIE_SECURE", "tru", false},
 		{"unprotected credentials", "KAFKA_USER", "user", false}, {"empty shards", "VOTE_DATABASE_URLS", "[]", false},
 		{"bad shard JSON", "VOTE_DATABASE_URLS", "password-secret", false}, {"pool bounds", "DB_MIN_CONNECTIONS", "21", false},

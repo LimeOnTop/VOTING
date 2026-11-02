@@ -2,10 +2,13 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,9 +20,11 @@ import (
 )
 
 type VoteOptions struct {
-	CounterShards   int
-	ReadConcurrency int
-	QueryTimeout    time.Duration
+	ShardIDs         []string
+	WriteConcurrency int
+	CounterShards    int
+	ReadConcurrency  int
+	QueryTimeout     time.Duration
 }
 
 type VoteRepository struct {
@@ -37,9 +42,20 @@ func NewVoteRepository(pools []*pgxpool.Pool, options VoteOptions) (*VoteReposit
 	if options.CounterShards < 1 || options.CounterShards > 1<<15 {
 		return nil, errors.New("counter shards must fit the PostgreSQL nonnegative smallint range")
 	}
-	if options.ReadConcurrency < 1 || options.QueryTimeout <= 0 {
-		return nil, errors.New("read concurrency and query timeout must be positive")
+	if options.ReadConcurrency < 1 || options.WriteConcurrency < 1 || options.QueryTimeout <= 0 {
+		return nil, errors.New("read/write concurrency and query timeout must be positive")
 	}
+	if len(options.ShardIDs) != len(pools) {
+		return nil, errors.New("one stable ID is required per vote database")
+	}
+	ids := map[string]bool{}
+	for _, id := range options.ShardIDs {
+		if id == "" || strings.ContainsAny(id, "\x00\r\n") || ids[id] {
+			return nil, errors.New("vote shard IDs must be nonempty and distinct")
+		}
+		ids[id] = true
+	}
+	options.ShardIDs = append([]string(nil), options.ShardIDs...)
 	seen := map[*pgxpool.Pool]bool{}
 	for _, pool := range pools {
 		if pool == nil || seen[pool] {
@@ -50,16 +66,24 @@ func NewVoteRepository(pools []*pgxpool.Pool, options VoteOptions) (*VoteReposit
 	return &VoteRepository{pools: append([]*pgxpool.Pool(nil), pools...), options: options}, nil
 }
 
-func hashKey(key string) uint32 {
-	h := fnv.New32a()
-	// hash.Hash.Write never returns an error.
-	_, _ = h.Write([]byte(key))
-	return h.Sum32()
+// Rendezvous scores depend on stable shard IDs, not their configuration order.
+func rendezvousIndex(ids []string, key string) int {
+	best, score := 0, uint64(0)
+	for i, id := range ids {
+		sum := sha256.Sum256([]byte("route:v1:" + strconv.Itoa(len(id)) + ":" + id + key))
+		value := binary.BigEndian.Uint64(sum[:8])
+		if i == 0 || value > score || value == score && id < ids[best] {
+			best, score = i, value
+		}
+	}
+	return best
 }
-
-// Changing shard order/count requires a data-routing migration.
 func (r *VoteRepository) shardFor(pollID, voterKey string) int {
-	return int(uint64(hashKey(pollID+":"+voterKey)) % uint64(len(r.pools))) //nolint:gosec // G115: bounded by len(r.pools).
+	return rendezvousIndex(r.options.ShardIDs, pollID+":"+voterKey)
+}
+func counterShard(voterKey string, count int) int {
+	sum := sha256.Sum256([]byte("counter:v1:" + voterKey))
+	return int(binary.BigEndian.Uint64(sum[:8]) % uint64(count)) //nolint:gosec // G115: bounded by validated positive smallint count.
 }
 
 type ballotRow struct {
@@ -79,6 +103,7 @@ WITH incoming AS (
  FROM jsonb_to_recordset($1::jsonb) AS x(
   poll_id text,voter_key text,options jsonb,accepted_at timestamptz,counter_shard integer,ordinal integer
  )
+ WHERE NOT EXISTS (SELECT 1 FROM finalized_polls f WHERE f.poll_id=x.poll_id)
  ORDER BY poll_id,voter_key,ordinal
 ), inserted AS (
  INSERT INTO vote_dedup (poll_id,voter_key)
@@ -136,29 +161,39 @@ func (r *VoteRepository) ApplyBatch(ctx context.Context, votes []entity.Vote, po
 			return 0, fmt.Errorf("immutable metadata missing for poll %s", vote.PollID)
 		}
 		shard := r.shardFor(vote.PollID, vote.VoterKey)
-		batches[shard] = append(batches[shard], ballotRow{PollID: vote.PollID, VoterKey: vote.VoterKey, Options: vote.Options, AcceptedAt: vote.AcceptedAt, CounterShard: int(uint64(hashKey(vote.VoterKey)) % uint64(r.options.CounterShards)), Ordinal: ordinal}) //nolint:gosec // G115: positive constructor-validated counter modulus.
+		batches[shard] = append(batches[shard], ballotRow{PollID: vote.PollID, VoterKey: vote.VoterKey, Options: vote.Options, AcceptedAt: vote.AcceptedAt, CounterShard: counterShard(vote.VoterKey, r.options.CounterShards), Ordinal: ordinal})
 		if shardPolls[shard] == nil {
 			shardPolls[shard] = map[string]entity.Poll{}
 		}
 		shardPolls[shard][poll.ID] = poll
 	}
-	counted := 0
+	counts := make([]int, len(r.pools))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(r.options.WriteConcurrency)
 	for shard, batch := range batches {
 		if len(batch) == 0 {
 			continue
 		}
-		metadataBatch := make([]entity.Poll, 0, len(shardPolls[shard]))
-		for _, poll := range shardPolls[shard] {
-			metadataBatch = append(metadataBatch, poll)
-		}
-		n, err := r.applyShard(ctx, r.pools[shard], batch, metadataBatch)
+		group.Go(func() error {
+			metadataBatch := make([]entity.Poll, 0, len(shardPolls[shard]))
+			for _, poll := range shardPolls[shard] {
+				metadataBatch = append(metadataBatch, poll)
+			}
+			n, err := r.applyShard(groupCtx, r.pools[shard], batch, metadataBatch)
+			counts[shard] = n
+			if err != nil {
+				return fmt.Errorf("apply vote shard %d: %w", shard, err)
+			}
+			return nil
+		})
+	}
+	err := group.Wait()
+	counted := 0
+	for _, n := range counts {
 		counted += n
-		if err != nil {
-			return counted, fmt.Errorf("apply vote shard %d: %w", shard, err)
-		}
 	}
 	// Partial commits require replay. The count covers this attempt only.
-	return counted, nil
+	return counted, err
 }
 
 func (r *VoteRepository) applyShard(ctx context.Context, pool *pgxpool.Pool, batch []ballotRow, polls []entity.Poll) (count int, err error) {
@@ -184,6 +219,14 @@ func (r *VoteRepository) applyShard(ctx context.Context, pool *pgxpool.Pool, bat
 	// Copy poll metadata to satisfy the shard-local foreign key.
 	if _, err = tx.Exec(bounded, ensurePollsSQL, metadata); err != nil {
 		return 0, fmt.Errorf("ensure projection metadata: %w", err)
+	}
+	ids := make([]string, len(polls))
+	for i, poll := range polls {
+		ids[i] = poll.ID
+	}
+	// Shared row locks let projectors run together but serialize finalization.
+	if _, err = tx.Exec(bounded, "SELECT id FROM polls WHERE id=ANY($1) ORDER BY id FOR SHARE", ids); err != nil {
+		return 0, fmt.Errorf("lock projection polls: %w", err)
 	}
 	if err = tx.QueryRow(bounded, applyBallotsSQL, ballots).Scan(&count); err != nil {
 		return 0, fmt.Errorf("project ballot batch: %w", err)

@@ -55,8 +55,9 @@ jobs:
           if helm template voting deploy/helm/voting --set image.tag=check > /dev/null 2>&1; then exit 1; fi
           if helm template voting deploy/helm/voting --set image.tag=check --set networkPolicy.enabled=false --set lifecycle.shutdownTimeoutSeconds=60 --set lifecycle.terminationGracePeriodSeconds=30 > /dev/null 2>&1; then exit 1; fi
           helm template voting deploy/helm/voting --set image.tag=check --set 'networkPolicy.dependencyCIDRs[0]=192.0.2.0/24' --set ingress.enabled=true --set serviceMonitor.enabled=true --set worker.keda.enabled=true --set worker.keda.authenticationRef=test > /tmp/chart-all.yaml
+          helm template voting deploy/helm/voting --set image.tag=check --set 'networkPolicy.dependencyCIDRs[0]=192.0.2.0/24' -f deploy/helm/voting/values-broadcast.yaml > /tmp/chart-broadcast.yaml
       - name: Kubernetes resource schemas
-        run: go run github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0 -strict -ignore-missing-schemas -summary /tmp/chart.yaml /tmp/chart-all.yaml
+        run: go run github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0 -strict -ignore-missing-schemas -summary /tmp/chart.yaml /tmp/chart-all.yaml /tmp/chart-broadcast.yaml
       - uses: actions/upload-artifact@v4
         with: {name: coverage, path: coverage.out}
   runtime:

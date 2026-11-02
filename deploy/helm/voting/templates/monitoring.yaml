@@ -26,6 +26,11 @@ spec:
   groups:
     - name: voting
       rules:
+        - alert: VotingWorkerUnavailable
+          expr: sum(up{namespace="{{ .Release.Namespace }}",service="{{ include "voting.name" . }}-worker"}) < 1 or absent(up{namespace="{{ .Release.Namespace }}",service="{{ include "voting.name" . }}-worker"})
+          for: 1m
+          labels: {severity: critical}
+          annotations: {summary: "No vote projection worker can be scraped; inspect restarts and Kafka lag"}
         - alert: VotingEnqueueFailures
           expr: sum(rate(voting_http_requests_total{route="POST /api/v1/polls/{id}/votes",status="Service Unavailable"}[2m])) > 1
           for: 1m
