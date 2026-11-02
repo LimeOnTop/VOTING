@@ -177,7 +177,7 @@ func (r *VoteRepository) applyShard(ctx context.Context, pool *pgxpool.Pool, bat
 		return 0, fmt.Errorf("begin projection: %w", err)
 	}
 	defer func() {
-		if cleanupErr := rollback(tx, r.options.QueryTimeout); cleanupErr != nil {
+		if cleanupErr := rollback(ctx, tx, r.options.QueryTimeout); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("rollback projection: %w", cleanupErr))
 		}
 	}()
@@ -194,15 +194,18 @@ func (r *VoteRepository) applyShard(ctx context.Context, pool *pgxpool.Pool, bat
 	return count, nil
 }
 
-func rollback(tx pgx.Tx, timeout time.Duration) error {
+func rollback(parent context.Context, tx pgx.Tx, timeout time.Duration) error {
 	// Use a fresh bounded context because the caller may already be cancelled.
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
 	defer cancel()
 	err := tx.Rollback(ctx)
 	if errors.Is(err, pgx.ErrTxClosed) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("rollback transaction: %w", err)
+	}
+	return nil
 }
 
 const shardResultsSQL = `
@@ -248,7 +251,7 @@ func (r *VoteRepository) Results(ctx context.Context, poll entity.Poll) (entity.
 		})
 	}
 	if err := group.Wait(); err != nil {
-		return result, err
+		return result, fmt.Errorf("aggregate result shards: %w", err)
 	}
 	for _, part := range parts {
 		result.Voters += part.voters

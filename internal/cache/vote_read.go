@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/LimeOnTop/VOTING/internal/entity"
@@ -34,7 +35,7 @@ func NewVoteReadRepository(source usecase.VoteReadRepository, options ResultOpti
 	}
 	c, err := newLocal[readValue]("vote_read", options.Capacity, options.Shards, options.MaxLoads, options.LoadTimeout, clock, observer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize results cache: %w", err)
 	}
 	return &VoteReadRepository{source: source, cache: c, options: options}, nil
 }
@@ -61,5 +62,8 @@ func (r *VoteReadRepository) Results(ctx context.Context, poll entity.Poll) (ent
 		}
 		return 0
 	})
-	return cloneResult(v.result), err
+	if err != nil {
+		return entity.Result{}, fmt.Errorf("read cached results: %w", err)
+	}
+	return cloneResult(v.result), nil
 }

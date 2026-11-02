@@ -38,7 +38,10 @@ func (s *ProjectionService) prepare(ctx context.Context, deliveries []usecase.De
 			return nil, nil, fmt.Errorf("unsupported vote version at partition %d offset %d", delivery.Position.Partition, delivery.Position.Offset)
 		}
 		key, err := hex.DecodeString(vote.VoterKey)
-		if err != nil || len(key) != entity.VoterKeyBytes {
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode voter key at partition %d offset %d: %w", delivery.Position.Partition, delivery.Position.Offset, err)
+		}
+		if len(key) != entity.VoterKeyBytes {
 			return nil, nil, fmt.Errorf("invalid voter key at partition %d offset %d", delivery.Position.Partition, delivery.Position.Offset)
 		}
 		poll, ok := polls[vote.PollID]
@@ -70,14 +73,14 @@ func (s *ProjectionService) Run(ctx context.Context) error {
 	for {
 		deliveries, err := s.consumer.FetchBatch(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("fetch projection batch: %w", err)
 		}
 		if len(deliveries) == 0 {
 			continue
 		}
 		votes, metadata, err := s.prepare(ctx, deliveries)
 		if err != nil {
-			return err
+			return fmt.Errorf("prepare projection batch: %w", err)
 		}
 		for {
 			bounded, cancel := context.WithTimeout(ctx, s.options.QueryTimeout)
@@ -88,7 +91,7 @@ func (s *ProjectionService) Run(ctx context.Context) error {
 				break
 			}
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return fmt.Errorf("project vote batch: %w", ctx.Err())
 			}
 			s.observer.Retried()
 			s.logger.Error("projection batch retry", "error", applyErr, "batch_size", len(votes))
@@ -96,7 +99,7 @@ func (s *ProjectionService) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return ctx.Err()
+				return fmt.Errorf("project vote batch: %w", ctx.Err())
 			case <-timer.C:
 			}
 		}

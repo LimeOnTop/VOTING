@@ -68,10 +68,14 @@ func TestPollInvalidInputAndIdentifierFailureDoNotWrite(t *testing.T) {
 	}
 }
 func TestPollPaginationValidationAndInheritedDeadline(t *testing.T) {
+	type traceKey struct{}
 	calls := 0
 	deadline := time.Now().Add(300 * time.Millisecond)
 	repo := fakePollRepository{list: func(ctx context.Context, limit, offset int) ([]entity.Poll, error) {
 		calls++
+		if ctx.Value(traceKey{}) != "request-trace" {
+			t.Error("request context values lost")
+		}
 		if limit != 20 || offset != 5 {
 			t.Errorf("pagination got %d/%d", limit, offset)
 		}
@@ -85,7 +89,7 @@ func TestPollPaginationValidationAndInheritedDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	ctx, cancel := context.WithDeadline(context.WithValue(t.Context(), traceKey{}, "request-trace"), deadline)
 	defer cancel()
 	polls, err := service.GetAll(ctx, 0, 5)
 	if err != nil || len(polls) != 1 {

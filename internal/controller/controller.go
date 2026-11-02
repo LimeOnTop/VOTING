@@ -97,10 +97,10 @@ func (c *Controller) error(w http.ResponseWriter, err error) {
 	case errors.Is(err, apperr.ErrInvalidIdentity):
 		c.fail(w, http.StatusPreconditionRequired, apperr.ErrInvalidIdentity.Error())
 	case errors.Is(err, apperr.ErrAlreadyVoted):
-		c.fail(w, http.StatusConflict, err.Error())
+		c.fail(w, http.StatusConflict, apperr.ErrAlreadyVoted.Error())
 	case errors.Is(err, apperr.ErrVotePending):
 		w.Header().Set("Retry-After", "1")
-		c.fail(w, http.StatusTooEarly, err.Error())
+		c.fail(w, http.StatusTooEarly, apperr.ErrVotePending.Error())
 	case errors.Is(err, apperr.ErrOverloaded):
 		w.Header().Set("Retry-After", "1")
 		c.fail(w, http.StatusTooManyRequests, apperr.ErrOverloaded.Error())
@@ -131,7 +131,11 @@ func (c *Controller) browserID(r *http.Request) (string, error) {
 	if err != nil {
 		return "", apperr.ErrInvalidIdentity
 	}
-	return c.identity.ParseToken(cookie.Value)
+	id, err := c.identity.ParseToken(cookie.Value)
+	if err != nil {
+		return "", fmt.Errorf("parse browser identity: %w", err)
+	}
+	return id, nil
 }
 
 // @Summary Начать анонимную сессию
@@ -145,7 +149,7 @@ func (c *Controller) session(w http.ResponseWriter, r *http.Request) {
 	if _, err := c.browserID(r); err != nil {
 		token, err := c.identity.NewToken()
 		if err != nil {
-			c.error(w, err)
+			c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: c.options.CookieName, Value: token, Path: "/", HttpOnly: true, Secure: c.options.SecureCookie, SameSite: http.SameSiteLaxMode, MaxAge: int(c.options.CookieMaxAge / time.Second)})
@@ -162,7 +166,7 @@ func (c *Controller) session(w http.ResponseWriter, r *http.Request) {
 func (c *Controller) getPoll(w http.ResponseWriter, r *http.Request) {
 	poll, err := c.polls.GetByID(r.Context(), r.PathValue("id"))
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(c.options.MetadataMaxAge/time.Second)))
@@ -187,7 +191,7 @@ func (c *Controller) vote(w http.ResponseWriter, r *http.Request) {
 	}
 	browser, err := c.browserID(r)
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	var input VoteRequest
@@ -196,7 +200,7 @@ func (c *Controller) vote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = c.voting.Accept(r.Context(), r.PathValue("id"), browser, input.Options); err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	c.respond(w, http.StatusAccepted, VoteResponse{Status: "accepted", ReceiptURL: "/api/v1/polls/" + r.PathValue("id") + "/receipt"})
@@ -214,12 +218,12 @@ func (c *Controller) receipt(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	browser, err := c.browserID(r)
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	options, err := c.voting.Receipt(r.Context(), r.PathValue("id"), browser)
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	if options == nil {
@@ -245,7 +249,7 @@ func (c *Controller) create(w http.ResponseWriter, r *http.Request) {
 	}
 	poll, err := c.polls.Create(r.Context(), entity.CreatePoll{Question: input.Question, Type: input.Type, Options: input.Options, OpensAt: input.OpensAt, ClosesAt: input.ClosesAt})
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	c.respond(w, http.StatusCreated, poll)
@@ -272,7 +276,7 @@ func (c *Controller) list(w http.ResponseWriter, r *http.Request) {
 	}
 	polls, err := c.polls.GetAll(r.Context(), limit, offset)
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	c.respond(w, http.StatusOK, polls)
@@ -296,7 +300,7 @@ func paginationInt(r *http.Request, name string) (int, error) {
 func (c *Controller) getResults(w http.ResponseWriter, r *http.Request) {
 	result, err := c.results.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		c.error(w, err)
+		c.error(w, fmt.Errorf("%s: %w", r.Pattern, err))
 		return
 	}
 	c.respond(w, http.StatusOK, result)

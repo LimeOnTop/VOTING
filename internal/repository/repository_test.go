@@ -218,7 +218,7 @@ func TestQueryDeadlineReleasesBlockedProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if e := rollback(lock, time.Second); e != nil {
+		if e := rollback(ctx, lock, time.Second); e != nil {
 			t.Errorf("release test lock: %v", e)
 		}
 	}()

@@ -27,15 +27,26 @@ func projectionOptions() ProjectionOptions {
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestProjectionRetriesWholeBatchBeforeCommittingAndLoadsDistinctMetadataOnce(t *testing.T) {
+	type traceKey struct{}
+	root := context.WithValue(t.Context(), traceKey{}, "projection-trace")
 	batch := deliveriesForTest()
 	events := []string{}
 	pollReads := map[string]int{}
 	fetches, applies, commits := 0, 0, 0
 	observer := &observed{}
-	polls := fakePolls{get: func(_ context.Context, id string) (entity.Poll, error) { pollReads[id]++; return openPoll(id), nil }}
+	polls := fakePolls{get: func(ctx context.Context, id string) (entity.Poll, error) {
+		if ctx.Value(traceKey{}) != "projection-trace" {
+			t.Error("metadata context lost")
+		}
+		pollReads[id]++
+		return openPoll(id), nil
+	}}
 	repo := fakeVoteRepository{apply: func(ctx context.Context, votes []entity.Vote, metadata []entity.Poll) (int, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("projection transaction has no deadline")
+		}
+		if ctx.Value(traceKey{}) != "projection-trace" {
+			t.Error("SQL context lost")
 		}
 		applies++
 		events = append(events, "apply")
@@ -52,13 +63,19 @@ func TestProjectionRetriesWholeBatchBeforeCommittingAndLoadsDistinctMetadataOnce
 		// observer values describe this successful attempt, not authoritative totals.
 		return 1, nil
 	}}
-	consumer := fakeConsumer{fetch: func(context.Context) ([]usecase.Delivery, error) {
+	consumer := fakeConsumer{fetch: func(ctx context.Context) ([]usecase.Delivery, error) {
+		if ctx.Value(traceKey{}) != "projection-trace" {
+			t.Error("consumer context lost")
+		}
 		fetches++
 		if fetches == 1 {
 			return batch, nil
 		}
 		return nil, io.EOF
 	}, commit: func(ctx context.Context, positions []usecase.Position) error {
+		if ctx.Value(traceKey{}) != "projection-trace" {
+			t.Error("commit context lost")
+		}
 		commits++
 		events = append(events, "commit")
 		if applies != 2 {
@@ -77,7 +94,7 @@ func TestProjectionRetriesWholeBatchBeforeCommittingAndLoadsDistinctMetadataOnce
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = service.Run(context.Background()); !errors.Is(err, io.EOF) {
+	if err = service.Run(root); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(events, []string{"apply", "apply", "commit"}) || commits != 1 {

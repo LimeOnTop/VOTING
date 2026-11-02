@@ -36,7 +36,7 @@ func (s *PollService) Create(ctx context.Context, input entity.CreatePoll) (enti
 	}
 	poll, err := entity.NewPoll(input, id, s.clock.Now())
 	if err != nil {
-		return entity.Poll{}, &apperr.Validation{Cause: err}
+		return entity.Poll{}, fmt.Errorf("validate poll: %w", &apperr.Validation{Cause: err})
 	}
 	bounded, cancel := context.WithTimeout(ctx, s.options.QueryTimeout)
 	defer cancel()
@@ -51,7 +51,11 @@ func (s *PollService) GetByID(ctx context.Context, id string) (entity.Poll, erro
 	}
 	bounded, cancel := context.WithTimeout(ctx, s.options.QueryTimeout)
 	defer cancel()
-	return s.repository.GetByID(bounded, id)
+	poll, err := s.repository.GetByID(bounded, id)
+	if err != nil {
+		return entity.Poll{}, fmt.Errorf("resolve poll: %w", err)
+	}
+	return poll, nil
 }
 func (s *PollService) GetAll(ctx context.Context, limit, offset int) ([]entity.Poll, error) {
 	if limit == 0 {
@@ -62,7 +66,11 @@ func (s *PollService) GetAll(ctx context.Context, limit, offset int) ([]entity.P
 	}
 	bounded, cancel := context.WithTimeout(ctx, s.options.QueryTimeout)
 	defer cancel()
-	return s.repository.GetAll(bounded, limit, offset)
+	polls, err := s.repository.GetAll(bounded, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list polls: %w", err)
+	}
+	return polls, nil
 }
 func (s *PollService) Warm(ctx context.Context, ids []string) error {
 	for _, id := range ids {
